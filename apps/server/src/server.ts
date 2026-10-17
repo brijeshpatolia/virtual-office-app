@@ -13,6 +13,7 @@ import type { Env } from './env.ts'
 import { registerRoutes } from './http/routes.ts'
 import { createMailer } from './mail/mailer.ts'
 import { createOfficeRoom, type OfficeRoomDeps } from './rooms/OfficeRoom.ts'
+import { createRoomStore } from './rooms/store.ts'
 
 export interface RunningServer {
   port: number
@@ -32,7 +33,7 @@ export async function startServer(env: Env): Promise<RunningServer> {
   const realtime = createRealtimeServer({
     httpServer,
     clientOrigin: env.CLIENT_ORIGIN,
-    roomDeps: { officeMap, verifyAccessToken, getOfficeAccess },
+    roomDeps: { officeMap, verifyAccessToken, getOfficeAccess, store: createRoomStore(database.db) },
     configureExpress: (app) => {
       app.disable('x-powered-by')
       // Better Auth reads the raw body, so it goes before express.json().

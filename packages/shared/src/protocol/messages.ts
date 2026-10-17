@@ -48,7 +48,8 @@ export type SitResponse = z.infer<typeof SitResponseSchema>
 export const SIT_REJECT_REASONS = ['taken', 'far', 'not_allowed', 'invalid'] as const
 export type SitRejectReason = (typeof SIT_REJECT_REASONS)[number]
 
-// Request 'seat:stand'. Always ok; the avatar stays where it sat.
+// Request 'seat:stand'. Always ok. The avatar stays where it sat when its body fits there; otherwise the server
+// moves it to the nearest free spot (read the new position from the state).
 export const StandRequestSchema = z.object({})
 export type StandRequest = z.infer<typeof StandRequestSchema>
 export const StandResponseSchema = z.object({ ok: z.literal(true) })
