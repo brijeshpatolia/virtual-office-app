@@ -1,7 +1,8 @@
 import { z } from 'zod'
 
 // HTTP API of the office server. Every route answers JSON. Errors: ApiError with the status in API_ERRORS.
-// Auth: the Better Auth session cookie (httpOnly), sent with credentials: 'include'.
+// Auth: the Better Auth session cookie (httpOnly), sent with credentials: 'include'. Requests other than GET, HEAD
+// and OPTIONS to the routes below must carry Origin = CLIENT_ORIGIN (else 403 forbidden).
 
 export const ORG_ROLES = ['owner', 'admin', 'member', 'guest'] as const
 export type OrgRole = (typeof ORG_ROLES)[number]
@@ -13,8 +14,10 @@ export type InviteRole = (typeof INVITE_ROLES)[number]
 export const TEMPLATE_ID = 'startup-hq-40x30'
 
 export const API = {
-  // Better Auth: email OTP, Google, organization (email invitations), /token, /jwks.
+  // Better Auth: email OTP, Google, organization (email invitations), /jwks. Its session JWT (/token) is off;
+  // the realtime token comes from rtToken.
   auth: '/api/auth',
+  config: '/api/config',
   me: '/api/me',
   companies: '/api/companies',
   office: (officeId: string) => `/api/offices/${encodeURIComponent(officeId)}`,
@@ -62,6 +65,10 @@ export const UserSummarySchema = z.object({
 export const OrgSummarySchema = z.object({ id: z.string(), name: z.string(), slug: z.string(), role: OrgRoleSchema })
 export const OfficeSummarySchema = z.object({ id: z.string(), orgId: z.string(), name: z.string() })
 
+// GET /api/config (public): the sign-in options of this server. google: Google sign-in is configured.
+export const ClientConfigResponseSchema = z.object({ google: z.boolean() })
+export type ClientConfigResponse = z.infer<typeof ClientConfigResponseSchema>
+
 // GET /api/me (signed in): the user, the companies they belong to and the offices of those companies.
 export const MeResponseSchema = z.object({
   user: UserSummarySchema,
@@ -70,14 +77,14 @@ export const MeResponseSchema = z.object({
 })
 export type MeResponse = z.infer<typeof MeResponseSchema>
 
-// POST /api/companies (signed in): a Better Auth organization (the caller is its owner) and its office from
+// POST /api/companies (signed in), 201: a Better Auth organization (the caller is its owner) and its office from
 // TEMPLATE_ID.
 export const CreateCompanyRequestSchema = z.object({ companyName: name, officeName: name })
 export type CreateCompanyRequest = z.infer<typeof CreateCompanyRequestSchema>
 export const CreateCompanyResponseSchema = z.object({ orgId: z.string(), officeId: z.string() })
 export type CreateCompanyResponse = z.infer<typeof CreateCompanyResponseSchema>
 
-// POST /api/offices/:officeId/invite-links (owner or admin). url = CLIENT_ORIGIN + CLIENT_ROUTES.invite(token).
+// POST /api/offices/:officeId/invite-links (owner or admin), 201. url = CLIENT_ORIGIN + CLIENT_ROUTES.invite(token).
 // The token is shown once; the server stores only its hash.
 export const CreateInviteLinkRequestSchema = z.object({
   role: z.enum(INVITE_ROLES),
@@ -98,8 +105,8 @@ export const InviteLinkInfoResponseSchema = z.object({
 })
 export type InviteLinkInfoResponse = z.infer<typeof InviteLinkInfoResponseSchema>
 
-// POST /api/invite-links/:token/accept (signed in). 410 invite_invalid when not valid.
-// A user who is already a member gets 200 and the link keeps its uses.
+// POST /api/invite-links/:token/accept (signed in). 404 for an unknown token, 410 invite_invalid when expired,
+// revoked or used up. A user who is already a member gets 200 and the link keeps its uses.
 export const AcceptInviteLinkResponseSchema = z.object({ orgId: z.string(), officeId: z.string() })
 export type AcceptInviteLinkResponse = z.infer<typeof AcceptInviteLinkResponseSchema>
 
