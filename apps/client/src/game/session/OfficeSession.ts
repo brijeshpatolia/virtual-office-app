@@ -1,5 +1,5 @@
 import Phaser from 'phaser'
-import type { OfficeMap, PlayerState } from '@vo/shared'
+import type { MoveReject, OfficeMap, PlayerState } from '@vo/shared'
 import type { OfficeLink, Unsubscribe } from '../../net/officeLink.ts'
 import { EventBus } from '../EventBus.ts'
 import { LocalPlayer, type MovementKeys } from '../player/LocalPlayer.ts'
@@ -19,10 +19,20 @@ export interface OfficeSessionDeps {
 // What tests and the e2e step read from the page (window.__voOffice).
 export interface OfficeDebugSnapshot {
   sessionId: string
-  // move:reject messages received from the server.
+  // move:reject messages received from the server, and the last one.
   rejects: number
-  local: { x: number; y: number; dir: string; seatId: string; zoneId: string; status: string } | null
+  lastReject: MoveReject | null
+  // walking: a walkTo is under way.
+  local: { x: number; y: number; dir: string; seatId: string; zoneId: string; status: string; walking: boolean } | null
   players: Array<{ sessionId: string; userId: string; name: string; x: number; y: number; seatId: string; zoneId: string }>
+  // seatId -> occupant userId ('' = free).
+  seats: Record<string, string>
+}
+
+export interface OfficeDebugHandle {
+  snapshot(): OfficeDebugSnapshot
+  // Dev builds only: LocalPlayer.walkTo (the e2e test walks with it where it needs to hit a doorway).
+  walkTo?(x: number, y: number): void
 }
 
 // The connected office inside the scene: the own avatar, the others, seats, zone toasts and presence reports.
@@ -35,6 +45,7 @@ export class OfficeSession {
   private local: LocalPlayer | null = null
   private localZoneId = ''
   private rejects = 0
+  private lastReject: MoveReject | null = null
 
   constructor(deps: OfficeSessionDeps) {
     this.deps = deps
@@ -45,6 +56,7 @@ export class OfficeSession {
       link.onPlayerRemove((_player, sessionId) => this.remove(sessionId)),
       link.onMoveReject((reject) => {
         this.rejects += 1
+        this.lastReject = reject
         this.local?.reject(reject)
       }),
     )
@@ -54,7 +66,10 @@ export class OfficeSession {
     scene.input.keyboard?.on(Phaser.Input.Keyboard.Events.ANY_KEY_DOWN, this.onInput)
     scene.input.on(Phaser.Input.Events.POINTER_MOVE, this.onInput)
     scene.game.events.on(Phaser.Core.Events.BLUR, this.onBlur)
-    Object.assign(window, { __voOffice: { snapshot: () => this.snapshot() } })
+    const debug: OfficeDebugHandle = { snapshot: () => this.snapshot() }
+    // Production builds drop this branch.
+    if (import.meta.env.DEV) debug.walkTo = (x, y) => this.local?.walkTo(x, y)
+    Object.assign(window, { __voOffice: debug })
   }
 
   update(now: number): void {
@@ -69,9 +84,18 @@ export class OfficeSession {
     return {
       sessionId: link.sessionId,
       rejects: this.rejects,
+      lastReject: this.lastReject,
       local:
         own && sprite
-          ? { x: sprite.x, y: sprite.y, dir: own.dir, seatId: own.seatId, zoneId: own.zoneId, status: own.status }
+          ? {
+              x: sprite.x,
+              y: sprite.y,
+              dir: own.dir,
+              seatId: own.seatId,
+              zoneId: own.zoneId,
+              status: own.status,
+              walking: this.local?.walking ?? false,
+            }
           : null,
       players: [...link.state.players].map(([sessionId, p]) => ({
         sessionId,
@@ -82,6 +106,7 @@ export class OfficeSession {
         seatId: p.seatId,
         zoneId: p.zoneId,
       })),
+      seats: Object.fromEntries([...link.state.seats].map(([seatId, seat]) => [seatId, seat.occupantId])),
     }
   }
 

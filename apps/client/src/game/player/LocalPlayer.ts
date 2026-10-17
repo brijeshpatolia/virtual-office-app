@@ -1,5 +1,15 @@
 import Phaser from 'phaser'
-import { PLAYER_BODY, rejectReason, type Facing, type MoveReject, type PlayerState, type SeatDef } from '@vo/shared'
+import {
+  MAX_SPEED,
+  MOVE_INTERVAL_MS,
+  PLAYER_BODY,
+  rejectReason,
+  type Facing,
+  type MoveReject,
+  type PlayerState,
+  type Point,
+  type SeatDef,
+} from '@vo/shared'
 import type { OfficeLink } from '../../net/officeLink.ts'
 import { AVATAR_FRAME } from '../avatar/avatarArt.ts'
 import { AvatarView } from '../avatar/AvatarView.ts'
@@ -42,6 +52,12 @@ export class LocalPlayer {
   // the same frame (Phaser clears the flag on key up).
   private interactPressed = false
   private destroyed = false
+  // Set by placeAt until the next frame: Body.reset leaves body.center without the body offset until the next
+  // physics step, so sample() reads the placed position meanwhile.
+  private placed: Point | null = null
+  // Dev builds only (e2e, walkTo): where the avatar walks instead of following the keys.
+  private autopilot: Point | null = null
+  private updatedAt: number | null = null
   private readonly onInteractKey = (): void => {
     this.interactPressed = true
   }
@@ -75,11 +91,24 @@ export class LocalPlayer {
     return this.seatId !== ''
   }
 
+  get walking(): boolean {
+    return this.autopilot !== null
+  }
+
   update(now: number): void {
     const { keys } = this.deps
+    this.placed = null
+    // At most one move interval per frame, so a stalled frame never turns into a jump.
+    const dt = Math.min(now - (this.updatedAt ?? now), MOVE_INTERVAL_MS)
+    this.updatedAt = now
     if (this.interactPressed) {
       this.interactPressed = false
       this.interact()
+    }
+    if (import.meta.env.DEV && this.autopilot && !this.busy && !this.seated) {
+      this.steer(this.autopilot, now, dt)
+      this.updateHint()
+      return
     }
     const input: DirectionInput =
       this.busy || this.seated
@@ -95,8 +124,16 @@ export class LocalPlayer {
     this.updateHint()
   }
 
+  // Dev builds only (e2e): walk in a straight line to (x, y) at MAX_SPEED, whatever the frame rate, sending the
+  // usual moves. It skips the local collision check, so the server decides: a move into a wall comes back as
+  // move:reject, which snaps the avatar back and ends the walk.
+  walkTo(x: number, y: number): void {
+    if (!this.seated && !this.busy) this.autopilot = { x, y }
+  }
+
   // The tab is hidden or the window lost focus: stop and tell the server at once.
   halt(now: number): void {
+    this.autopilot = null
     if (this.body.enable) this.body.setVelocity(0, 0)
     if (!this.seated && !this.busy) this.send(now, false, true)
   }
@@ -111,6 +148,7 @@ export class LocalPlayer {
 
   reject(reject: MoveReject): void {
     if (this.seated || !this.sender.shouldApplyReject(reject.seq)) return
+    this.autopilot = null
     this.placeAt(reject.x, reject.y)
     this.sender.reset(this.sample(false))
   }
@@ -123,6 +161,21 @@ export class LocalPlayer {
     if (this.hint !== null) EventBus.emit('seat-hint', null)
   }
 
+  private steer(target: Point, now: number, dt: number): void {
+    const { x, y } = this.sprite
+    const dx = target.x - x
+    const dy = target.y - y
+    const remaining = Math.hypot(dx, dy)
+    const step = (MAX_SPEED * dt) / 1000
+    const arrived = remaining <= step
+    this.body.setVelocity(0, 0)
+    this.dir = facingFor({ vx: dx, vy: dy }, this.dir)
+    this.placeAt(arrived ? target.x : x + (dx / remaining) * step, arrived ? target.y : y + (dy / remaining) * step)
+    this.view.setPose(this.dir, !arrived)
+    if (arrived) this.autopilot = null
+    this.send(now, !arrived, arrived)
+  }
+
   private send(now: number, moving: boolean, force: boolean): void {
     const move = this.sender.update(now, this.sample(moving), force)
     if (move) this.deps.link.sendMove(move)
@@ -130,7 +183,8 @@ export class LocalPlayer {
 
   // The sprite centre, from the body (already stepped this frame) when it is active.
   private sample(moving: boolean): MoveSample {
-    const { x, y } = this.body.enable ? { x: this.body.center.x, y: this.body.center.y - PLAYER_BODY.offsetY } : this.sprite
+    const body = this.body.enable ? { x: this.body.center.x, y: this.body.center.y - PLAYER_BODY.offsetY } : this.sprite
+    const { x, y } = this.placed ?? body
     return { x, y, dir: this.dir, moving }
   }
 
@@ -138,6 +192,7 @@ export class LocalPlayer {
     this.body.reset(x, y)
     this.sprite.setPosition(x, y)
     this.view.sync()
+    this.placed = { x, y }
   }
 
   private interact(): void {

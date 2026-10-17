@@ -2,8 +2,9 @@ import react from '@vitejs/plugin-react'
 import { defineConfig } from 'vite'
 
 // The office server (apps/server). In dev the browser talks only to this origin: /api goes to the server and
-// /colyseus (HTTP matchmaking and the WebSocket) goes to it without the prefix.
-const OFFICE_SERVER = 'http://127.0.0.1:2567'
+// /colyseus (HTTP matchmaking and the WebSocket) goes to it without the prefix. The e2e run sets OFFICE_SERVER_URL
+// to its own server.
+const OFFICE_SERVER = process.env.OFFICE_SERVER_URL ?? 'http://127.0.0.1:2567'
 
 export default defineConfig({
   plugins: [react()],
@@ -11,7 +12,8 @@ export default defineConfig({
     port: 8000,
     strictPort: true,
     proxy: {
-      '/api': { target: OFFICE_SERVER },
+      // xfwd: X-Forwarded-For carries the browser's address, which Better Auth's rate limits key on.
+      '/api': { target: OFFICE_SERVER, xfwd: true },
       '/colyseus': { target: OFFICE_SERVER, ws: true, rewrite: (path) => path.replace(/^\/colyseus/, '') },
     },
   },

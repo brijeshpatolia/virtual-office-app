@@ -9,6 +9,7 @@ permissions:
   contents: read
 
 jobs:
+  # The same steps as npm run check. build also starts and stops the server once under plain Node.
   check:
     runs-on: ubuntu-latest
     steps:
@@ -23,3 +24,26 @@ jobs:
       - run: npm test
       - run: npm run validate:map
       - run: npm run build
+
+  # Two browsers in one office against a real server (PGlite in a temporary folder, sign-in codes from the dev mail log).
+  e2e:
+    needs: check
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm run e2e
+      - if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-report
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 14
