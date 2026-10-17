@@ -27,3 +27,10 @@ export function cameraBounds(view: Size, map: Size, zoom: number): Rect {
     height,
   }
 }
+
+// Zoom while following the own avatar: 2 on typical desktop windows, 1 on small screens.
+export const FOLLOW_ZOOM_2_MIN = { width: 900, height: 560 } as const
+
+export function followZoom(view: Size): number {
+  return view.width >= FOLLOW_ZOOM_2_MIN.width && view.height >= FOLLOW_ZOOM_2_MIN.height ? 2 : 1
+}

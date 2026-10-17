@@ -1,0 +1,202 @@
+import Phaser from 'phaser'
+import { PLAYER_BODY, rejectReason, type Facing, type MoveReject, type PlayerState, type SeatDef } from '@vo/shared'
+import type { OfficeLink } from '../../net/officeLink.ts'
+import { AVATAR_FRAME } from '../avatar/avatarArt.ts'
+import { AvatarView } from '../avatar/AvatarView.ts'
+import { EventBus } from '../EventBus.ts'
+import { nearestFreeSeat, seatHint, sitRejectText } from '../seats.ts'
+import { facingFor, inputVelocity, NO_INPUT, type DirectionInput } from './input.ts'
+import { MoveSender, type MoveSample } from './moveSender.ts'
+
+export interface MovementKeys {
+  up: Phaser.Input.Keyboard.Key[]
+  down: Phaser.Input.Keyboard.Key[]
+  left: Phaser.Input.Keyboard.Key[]
+  right: Phaser.Input.Keyboard.Key[]
+  interact: Phaser.Input.Keyboard.Key
+}
+
+export interface LocalPlayerDeps {
+  scene: Phaser.Scene
+  link: OfficeLink
+  obstacles: Phaser.Physics.Arcade.StaticGroup
+  seats: readonly SeatDef[]
+  keys: MovementKeys
+}
+
+const anyDown = (keys: Phaser.Input.Keyboard.Key[]): boolean => keys.some((key) => key.isDown)
+
+// The own avatar: predicted locally with Arcade physics (a 20x12 body at the feet), checked by the server.
+export class LocalPlayer {
+  readonly view: AvatarView
+  private readonly deps: LocalPlayerDeps
+  private readonly body: Phaser.Physics.Arcade.Body
+  private readonly collider: Phaser.Physics.Arcade.Collider
+  private readonly sender: MoveSender
+  private dir: Facing
+  private seatId: string
+  // A seat request is on its way; input waits for the answer.
+  private busy = false
+  private hint: string | null = null
+  // Set by the E key's down event and read once per frame. JustDown() would miss a tap whose key up arrives in
+  // the same frame (Phaser clears the flag on key up).
+  private interactPressed = false
+  private destroyed = false
+  private readonly onInteractKey = (): void => {
+    this.interactPressed = true
+  }
+
+  constructor(deps: LocalPlayerDeps, state: PlayerState) {
+    this.deps = deps
+    this.dir = state.dir
+    this.seatId = state.seatId
+    const { scene } = deps
+    this.view = new AvatarView(scene, state, state.dir, (key, frame) => scene.physics.add.sprite(state.x, state.y, key, frame))
+    const sprite = this.view.sprite as Phaser.Physics.Arcade.Sprite
+    this.body = sprite.body as Phaser.Physics.Arcade.Body
+    // The body centre is the feet point: PLAYER_BODY.offsetY below the sprite centre.
+    this.body
+      .setSize(PLAYER_BODY.w, PLAYER_BODY.h, false)
+      .setOffset((AVATAR_FRAME.width - PLAYER_BODY.w) / 2, AVATAR_FRAME.height / 2 + PLAYER_BODY.offsetY - PLAYER_BODY.h / 2)
+      .setCollideWorldBounds(true)
+    // Recompute the body position from the sprite with the new size and offset.
+    this.body.reset(state.x, state.y)
+    this.body.enable = this.seatId === ''
+    this.collider = scene.physics.add.collider(sprite, deps.obstacles)
+    this.sender = new MoveSender(this.sample(false))
+    deps.keys.interact.on(Phaser.Input.Keyboard.Events.DOWN, this.onInteractKey)
+  }
+
+  get sprite(): Phaser.GameObjects.Sprite {
+    return this.view.sprite
+  }
+
+  get seated(): boolean {
+    return this.seatId !== ''
+  }
+
+  update(now: number): void {
+    const { keys } = this.deps
+    if (this.interactPressed) {
+      this.interactPressed = false
+      this.interact()
+    }
+    const input: DirectionInput =
+      this.busy || this.seated
+        ? NO_INPUT
+        : { up: anyDown(keys.up), down: anyDown(keys.down), left: anyDown(keys.left), right: anyDown(keys.right) }
+    const velocity = inputVelocity(input)
+    const moving = velocity.vx !== 0 || velocity.vy !== 0
+    if (this.body.enable) this.body.setVelocity(velocity.vx, velocity.vy)
+    this.dir = facingFor(velocity, this.dir)
+    this.view.setPose(this.dir, moving)
+    this.view.sync()
+    if (!this.seated && !this.busy) this.send(now, moving, false)
+    this.updateHint()
+  }
+
+  // The tab is hidden or the window lost focus: stop and tell the server at once.
+  halt(now: number): void {
+    if (this.body.enable) this.body.setVelocity(0, 0)
+    if (!this.seated && !this.busy) this.send(now, false, true)
+  }
+
+  // Server truth for the own player: look, and seats changed by the server (e.g. after a reconnect).
+  applyServerState(state: PlayerState): void {
+    this.view.setLook(state)
+    if (this.busy || state.seatId === this.seatId) return
+    if (state.seatId === '') this.standUp()
+    else this.sitAt(state.seatId, state.x, state.y, state.dir)
+  }
+
+  reject(reject: MoveReject): void {
+    if (this.seated || !this.sender.shouldApplyReject(reject.seq)) return
+    this.placeAt(reject.x, reject.y)
+    this.sender.reset(this.sample(false))
+  }
+
+  destroy(): void {
+    this.destroyed = true
+    this.deps.keys.interact.off(Phaser.Input.Keyboard.Events.DOWN, this.onInteractKey)
+    this.collider.destroy()
+    this.view.destroy()
+    if (this.hint !== null) EventBus.emit('seat-hint', null)
+  }
+
+  private send(now: number, moving: boolean, force: boolean): void {
+    const move = this.sender.update(now, this.sample(moving), force)
+    if (move) this.deps.link.sendMove(move)
+  }
+
+  // The sprite centre, from the body (already stepped this frame) when it is active.
+  private sample(moving: boolean): MoveSample {
+    const { x, y } = this.body.enable ? { x: this.body.center.x, y: this.body.center.y - PLAYER_BODY.offsetY } : this.sprite
+    return { x, y, dir: this.dir, moving }
+  }
+
+  private placeAt(x: number, y: number): void {
+    this.body.reset(x, y)
+    this.sprite.setPosition(x, y)
+    this.view.sync()
+  }
+
+  private interact(): void {
+    if (this.busy) return
+    const { link } = this.deps
+    this.busy = true
+    if (this.seated) {
+      link.stand().then(
+        () => this.standUp(),
+        () => EventBus.emit('toast', 'Could not stand up. Try again.'),
+      ).finally(() => {
+        this.busy = false
+      })
+      return
+    }
+    const seat = this.nearbySeat()
+    if (!seat) {
+      this.busy = false
+      return
+    }
+    this.body.setVelocity(0, 0)
+    link.sit(seat.id).then(
+      (response) => this.sitAt(response.seatId, response.x, response.y, response.dir),
+      (error: unknown) => EventBus.emit('toast', sitRejectText(rejectReason(error))),
+    ).finally(() => {
+      this.busy = false
+    })
+  }
+
+  // Also the answer of a seat request, which may arrive after destroy().
+  private sitAt(seatId: string, x: number, y: number, dir: Facing): void {
+    if (this.destroyed) return
+    this.seatId = seatId
+    this.dir = dir
+    this.body.setVelocity(0, 0)
+    this.placeAt(x, y)
+    this.body.enable = false
+    this.view.setPose(dir, false)
+    this.sender.reset(this.sample(false))
+  }
+
+  private standUp(): void {
+    if (this.destroyed) return
+    this.seatId = ''
+    this.body.enable = true
+    this.placeAt(this.sprite.x, this.sprite.y)
+    this.sender.reset(this.sample(false))
+  }
+
+  private nearbySeat(): SeatDef | null {
+    const { seats, link } = this.deps
+    const feet = { x: this.body.center.x, y: this.body.center.y }
+    return nearestFreeSeat(seats, feet, (seatId) => (link.state.seats.get(seatId)?.occupantId ?? '') === '')
+  }
+
+  private updateHint(): void {
+    const hint = this.busy ? this.hint : seatHint(this.seated, this.seated ? null : this.nearbySeat())
+    if (hint === this.hint) return
+    this.hint = hint
+    EventBus.emit('seat-hint', hint)
+  }
+}

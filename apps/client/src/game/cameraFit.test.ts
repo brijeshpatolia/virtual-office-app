@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { cameraBounds, fitZoom } from './cameraFit.ts'
+import { cameraBounds, fitZoom, followZoom } from './cameraFit.ts'
 
 const map = { width: 1280, height: 960 }
 
@@ -31,5 +31,14 @@ describe('cameraBounds', () => {
       width: 1920,
       height: 1080,
     })
+  })
+})
+
+describe('followZoom', () => {
+  it('uses zoom 2 on desktop windows and 1 on small screens', () => {
+    expect(followZoom({ width: 1920, height: 1000 })).toBe(2)
+    expect(followZoom({ width: 1280, height: 640 })).toBe(2)
+    expect(followZoom({ width: 800, height: 1000 })).toBe(1)
+    expect(followZoom({ width: 390, height: 780 })).toBe(1)
   })
 })

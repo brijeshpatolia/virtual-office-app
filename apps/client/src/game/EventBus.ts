@@ -13,6 +13,10 @@ export type GameEvents = {
   'office-ready': [scene: OfficeScene]
   'zone-hover': [zone: ZoneHover | null]
   'map-debug': [visible: boolean]
+  // The E-key hint near a seat ('E: sit', 'E: sit (computer)', 'E: stand'), null when none applies.
+  'seat-hint': [hint: string | null]
+  // A short message over the map: zone entered, seat taken.
+  toast: [text: string]
 }
 
 export type GameEventName = keyof GameEvents
