@@ -1,5 +1,6 @@
 import type { CSSProperties } from 'react'
 import { PhaserGame } from './game/PhaserGame.tsx'
+import { Hud } from './ui/Hud.tsx'
 
 const appStyle: CSSProperties = {
   position: 'relative',
@@ -12,7 +13,7 @@ export function App() {
   return (
     <div style={appStyle}>
       <PhaserGame />
-      {/* HUD overlays (chat bar, media dock, prompts) go here, absolutely positioned. */}
+      <Hud />
     </div>
   )
 }
