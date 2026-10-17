@@ -1,0 +1,10 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "jsx": "react-jsx",
+    "types": ["vite/client"],
+    // phaser@4.2.1 ships .d.ts files with errors (TS2526, TS2416), so library checks are off here only.
+    "skipLibCheck": true
+  },
+  "include": ["src", "vite.config.ts"]
+}
