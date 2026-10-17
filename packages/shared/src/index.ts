@@ -1,2 +1,7 @@
-// Placeholder until the map parser and shared rules land here.
-export const SHARED_PACKAGE = '@vo/shared'
+export * from './constants.ts'
+export * from './types.ts'
+export * from './geometry.ts'
+export { OfficeMapError, parseOfficeMap } from './officeMap.ts'
+export * from './zones.ts'
+export * from './grid.ts'
+export * from './validate.ts'

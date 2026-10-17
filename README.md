@@ -44,7 +44,8 @@ Run each script from the repository root with `npm run <name>`.
 | `typecheck`    | Checks the types in all workspaces.                                 |
 | `lint`         | Runs ESLint. A warning also makes it fail.                          |
 | `test`         | Runs all tests one time with Vitest.                                |
-| `check`        | Runs `typecheck`, `lint`, `test` and `build`.                       |
+| `validate:map` | Checks the office map file (`map.json`) against the map rules.      |
+| `check`        | Runs `typecheck`, `lint`, `test`, `validate:map` and `build`.       |
 
 Run `npm run check` before you push. GitHub Actions runs the same steps on each push to `main` and on each pull request.
 
