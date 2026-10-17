@@ -26,7 +26,7 @@ Node.js 22.18 and newer can run TypeScript files directly. Some scripts use this
    npm install
    ```
 
-4. Start the development server:
+4. Start the office server and the client together:
 
    ```bash
    npm run dev
@@ -34,20 +34,30 @@ Node.js 22.18 and newer can run TypeScript files directly. Some scripts use this
 
 5. Open http://localhost:8000 in your browser.
 
+You need no accounts and no database for development. The server stores its data in PGlite (Postgres in WebAssembly) in `.data/pglite`.
+To sign in, enter any email address. The server prints the sign-in code in its console and appends the mail to `.data/dev-mail.log`.
+
+P1a is in progress: until the auth and realtime work lands, the server stops at start with a `Not implemented` message (see Status).
+
 ## Scripts
 
 Run each script from the repository root with `npm run <name>`.
 
-| Script         | What it does                                                        |
-| -------------- | ------------------------------------------------------------------- |
-| `dev`          | Starts the client development server on port 8000.                  |
-| `build`        | Builds the client into `apps/client/dist`.                          |
-| `preview`      | Serves the built client on port 8000.                               |
-| `typecheck`    | Checks the types in all workspaces.                                 |
-| `lint`         | Runs ESLint. A warning also makes it fail.                          |
-| `test`         | Runs all tests one time with Vitest.                                |
-| `validate:map` | Checks the office map file (`map.json`) against the map rules.      |
-| `check`        | Runs `typecheck`, `lint`, `test`, `validate:map` and `build`.       |
+| Script         | What it does                                                                     |
+| -------------- | -------------------------------------------------------------------------------- |
+| `dev`          | Starts the office server (port 2567) and the client (port 8000) together.        |
+| `dev:server`   | Starts only the office server. It restarts when a file changes.                  |
+| `dev:client`   | Starts only the client. Vite sends `/api` and `/colyseus` to the office server.  |
+| `start`        | Starts the office server without the file watcher.                               |
+| `build`        | Builds the client into `apps/client/dist`.                                       |
+| `preview`      | Serves the built client on port 8000.                                            |
+| `typecheck`    | Checks the types in all workspaces.                                              |
+| `lint`         | Runs ESLint. A warning also makes it fail.                                       |
+| `test`         | Runs all tests one time with Vitest.                                             |
+| `e2e`          | Runs the Playwright tests in `e2e/` against `npm run dev`.                       |
+| `db:generate`  | Writes a new SQL migration to `packages/db/drizzle` from the Drizzle schema.     |
+| `validate:map` | Checks the office map file (`map.json`) against the map rules.                   |
+| `check`        | Runs `typecheck`, `lint`, `test`, `validate:map` and `build`.                    |
 
 Run `npm run check` before you push. GitHub Actions runs the same steps on each push to `main` and on each pull request.
 
@@ -56,47 +66,88 @@ Run `npm run check` before you push. GitHub Actions runs the same steps on each 
 ```
 .
 ├── apps/
-│   └── client/                 Browser client (@vo/client)
-│       ├── index.html          Vite entry page
-│       ├── public/assets/map/  Tiled map (map.json) and tileset images
-│       ├── src/
-│       │   ├── main.tsx        React entry point
-│       │   ├── App.tsx         Full-screen layout: the game and the HUD
-│       │   ├── ui/             React HUD (zone label, debug hint)
-│       │   └── game/
-│       │       ├── EventBus.ts       Typed events between React and Phaser
-│       │       ├── PhaserGame.tsx    Creates and destroys the Phaser game
-│       │       ├── config.ts         Phaser game settings
-│       │       ├── depth.ts          Draw order of the tile layers, avatars and debug overlay
-│       │       ├── readOfficeMap.ts  Parses and validates map.json with @vo/shared
-│       │       ├── obstacles.ts      Static Arcade bodies from the Collision layer
-│       │       ├── zoneHover.ts      Zone under the mouse, sent to the HUD
-│       │       ├── debug/            Map debug overlay
-│       │       └── scenes/
-│       │           └── OfficeScene.ts  Builds the office from the map
-│       └── vite.config.ts
+│   ├── client/                 Browser client (@vo/client)
+│   │   ├── index.html          Vite entry page
+│   │   ├── public/assets/map/  Tiled map (map.json) and tileset images
+│   │   ├── src/
+│   │   │   ├── main.tsx        React entry point
+│   │   │   ├── App.tsx         Full-screen layout: the game and the HUD
+│   │   │   ├── ui/             React HUD (zone label, debug hint)
+│   │   │   └── game/
+│   │   │       ├── EventBus.ts       Typed events between React and Phaser
+│   │   │       ├── PhaserGame.tsx    Creates and destroys the Phaser game
+│   │   │       ├── config.ts         Phaser game settings
+│   │   │       ├── depth.ts          Draw order of the tile layers, avatars and debug overlay
+│   │   │       ├── readOfficeMap.ts  Parses and validates map.json with @vo/shared
+│   │   │       ├── obstacles.ts      Static Arcade bodies from the Collision layer
+│   │   │       ├── zoneHover.ts      Zone under the mouse, sent to the HUD
+│   │   │       ├── debug/            Map debug overlay
+│   │   │       └── scenes/
+│   │   │           └── OfficeScene.ts  Builds the office from the map
+│   │   └── vite.config.ts      Dev server on port 8000 with the proxy to the office server
+│   └── server/                 Office server (@vo/server): Express, Better Auth and Colyseus on one port
+│       ├── .env.example        Optional local settings (copy to apps/server/.env)
+│       └── src/
+│           ├── index.ts        Entry point: reads the environment and starts the server
+│           ├── env.ts          Environment variables, checked with zod
+│           ├── server.ts       Wires the database, auth, HTTP routes and the office room
+│           ├── auth/           Better Auth, realtime token check, office membership
+│           ├── mail/           Sign-in codes and invitations (Resend; console and log file in dev)
+│           ├── http/           The /api routes
+│           └── rooms/          OfficeRoom (one Colyseus room per office) and its synced state
 ├── packages/
+│   ├── db/                     Database (@vo/db): Drizzle schema, migrations, PGlite or Postgres
+│   │   ├── src/schema/         Tables (auth.ts is generated by the Better Auth CLI)
+│   │   └── drizzle/            SQL migrations, applied when the server starts
 │   └── shared/                 Code for the client and the server (@vo/shared)
 │       ├── src/
 │       │   ├── officeMap.ts    parseOfficeMap: Tiled JSON to an OfficeMap
 │       │   ├── zones.ts        zoneAt and ZoneTracker (zone changes with hysteresis)
 │       │   ├── grid.ts         Collision grid, line of sight, reachability
 │       │   ├── validate.ts     validateOfficeMap: the map rules
+│       │   ├── movement.ts     Server move checks
+│       │   ├── protocol/       Realtime messages, synced state shape and HTTP API (zod schemas)
 │       │   └── cli/validate-map.ts  The validate:map command
 │       └── test/
 ├── .github/workflows/ci.yml    Continuous integration
 ├── CREDITS.md                  Art credits and license notes
 ├── eslint.config.js
+├── playwright.config.ts        End-to-end tests (e2e/)
 ├── tsconfig.base.json          TypeScript settings for all workspaces
 └── vitest.config.ts
 ```
 
 The repository uses npm workspaces. Each folder in `apps/` and `packages/` is a workspace.
-`@vo/shared` has no build step. Vite and Node.js read its TypeScript files directly.
+No workspace has a build step except the client. Node.js runs the server's TypeScript files directly (type stripping), and Vite reads `@vo/shared` directly.
+So the code uses only erasable TypeScript syntax: no enums, no namespaces, no parameter properties and no decorators.
 
 The design plan asked for a pnpm 12 workspace. We use npm workspaces on purpose:
 npm comes with Node.js, so you and CI need no other tool and no extra setup step.
 The folder layout is the same as with pnpm. A later move to pnpm needs only a new lockfile, the CI setup and the `--workspace` flags in the scripts.
+
+## Office server
+
+`apps/server` runs Express (the Better Auth routes under `/api/auth` and the other `/api` routes) and Colyseus on one HTTP server, port 2567.
+In development the browser talks only to http://localhost:8000. Vite forwards `/api` to the server, and `/colyseus` (matchmaking and the WebSocket) without the `/colyseus` prefix.
+
+The server reads these environment variables. In development all of them are optional.
+
+| Variable                                    | Default                                    | Notes                                                                    |
+| ------------------------------------------- | ------------------------------------------ | ------------------------------------------------------------------------ |
+| `NODE_ENV`                                  | `development`                              | `development`, `test` or `production`.                                   |
+| `PORT`                                      | `2567`                                     |                                                                          |
+| `CLIENT_ORIGIN`                             | `http://localhost:8000`                    | The only origin that may call the API with cookies.                      |
+| `BETTER_AUTH_URL`                           | `CLIENT_ORIGIN`                            | Public origin of `/api/auth`. Required in production.                    |
+| `BETTER_AUTH_SECRET`                        | a fixed development value                  | At least 32 characters. Required in production.                          |
+| `DATABASE_URL`                              | unset: PGlite                              | Postgres connection string. Required in production.                      |
+| `DATA_DIR`                                  | `.data`                                    | PGlite files (`pglite/`) and the dev mail log (`dev-mail.log`).          |
+| `PGLITE_DIR`                                | `DATA_DIR/pglite` (tests: `memory://`)     |                                                                          |
+| `RESEND_API_KEY`, `EMAIL_FROM`              | unset                                      | Required in production. Development prints mail instead of sending it.   |
+| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`  | unset                                      | Google sign-in is on only when both are set.                             |
+| `MAP_PATH`                                  | `../client/public/assets/map/map.json`     | Relative to `apps/server`.                                               |
+
+Put local values in `apps/server/.env` (see `apps/server/.env.example`). The file is not committed.
+In production the server refuses to start without the required values. It never prints mail in production.
 
 ## How the map works
 
@@ -237,7 +288,7 @@ Doors and walls are in no zone, so the label disappears there.
 
 ## Status
 
-The project is in phase P0: new toolchain, and the map as data.
+Phase P0 (new toolchain, the map as data) is done. Phase P1a (walkable multiplayer office and accounts, on one machine) is in progress.
 
 Done in P0:
 
@@ -251,7 +302,6 @@ Done in P0:
 Still open in P0:
 
 - Art license: buy the LimeZu licenses, remove the six PNG files from the git history and serve them from private storage (see `CREDITS.md`).
-- `apps/server` and `packages/db` do not exist yet.
 
 Moved to P1:
 
@@ -259,7 +309,9 @@ Moved to P1:
   They go into `@vo/shared` (without Phaser) together with the multiplayer server that uses them.
   P0 ports the map model (`officeMap.ts`), the zones (`ZoneManager.ts`), line of sight and the validator.
 
-Next (P1): avatars and movement, camera follow, seats, accounts and the multiplayer server.
+P1a so far: the `apps/server` and `packages/db` skeletons, all dependencies, and the shared protocol in `packages/shared/src/protocol` (realtime messages, synced state, HTTP API).
+Next in P1a: accounts and companies (Better Auth), the office room (moves, zones, seats, presence), and the client screens and avatars.
+P1b: deployment (Fly.io, Neon, Cloudflare Pages, Resend, Google sign-in).
 
 ## Art and license
 

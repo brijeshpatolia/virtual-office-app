@@ -5,3 +5,7 @@ coverage
 *.tsbuildinfo
 .DS_Store
 .vite
+.data/
+.env
+test-results/
+playwright-report/

@@ -1,0 +1,10 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "types": ["node"],
+    // @colyseus/sdk, drizzle-orm, pglite and better-auth ship .d.ts files that fail under TS 6, so library checks
+    // are off here only.
+    "skipLibCheck": true
+  },
+  "include": ["src", "test"]
+}
