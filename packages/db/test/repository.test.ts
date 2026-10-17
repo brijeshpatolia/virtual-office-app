@@ -76,8 +76,47 @@ describe('forOrg', () => {
 
     await org.releaseInviteLink(link.id)
     expect(await org.consumeInviteLink(link.id, new Date(Date.now() + 120_000))).toBe(false)
-    expect(await org.revokeInviteLink(link.id)).toBe(true)
+    expect(await org.revokeInviteLink('another-office', link.id)).toBe(false)
+    expect(await other.revokeInviteLink(office.id, link.id)).toBe(false)
+    expect(await org.revokeInviteLink(office.id, link.id)).toBe(true)
     expect(await org.consumeInviteLink(link.id)).toBe(false)
+  })
+
+  it('lists the usable links of an office and revokes the links of one creator', async () => {
+    const org = forOrg(handle.db, await seedOrg('g'))
+    const other = forOrg(handle.db, await seedOrg('h'))
+    const [kim, lou] = [await seedUser('kim@example.com'), await seedUser('lou@example.com')]
+    const office = await org.createOffice({ name: 'HQ', templateId: 't', templateVersion: 1 })
+    const make = (createdBy: string, expiresInMs = 60_000, maxUses: number | null = null) =>
+      org.createInviteLink({ officeId: office.id, tokenHash: newId(), role: 'member', maxUses, expiresAt: new Date(Date.now() + expiresInMs), createdBy })
+    const byKim = await make(kim)
+    const byLou = await make(lou)
+    await make(kim, -1000)
+    const usedUp = await make(kim, 60_000, 1)
+    expect(await org.consumeInviteLink(usedUp.id)).toBe(true)
+
+    const listed = await org.listActiveInviteLinks(office.id)
+    expect(listed.map((l) => [l.id, l.creatorName]).sort()).toEqual([[byKim.id, 'kim@example.com'], [byLou.id, 'lou@example.com']].sort())
+    expect(await other.listActiveInviteLinks(office.id)).toEqual([])
+
+    expect(await other.revokeInviteLinksCreatedBy(kim)).toBe(0)
+    expect(await org.revokeInviteLinksCreatedBy(kim)).toBe(3)
+    expect((await org.listActiveInviteLinks(office.id)).map((l) => l.id)).toEqual([byLou.id])
+  })
+
+  it('records removed members per company', async () => {
+    const org = forOrg(handle.db, await seedOrg('i'))
+    const other = forOrg(handle.db, await seedOrg('j'))
+    const [mia, olga] = [await seedUser('mia@example.com'), await seedUser('olga@example.com')]
+    expect(await org.wasRemoved(mia)).toBe(false)
+    await org.recordRemoval(mia, olga)
+    await org.recordRemoval(mia, null)
+    expect(await org.wasRemoved(mia)).toBe(true)
+    expect(await other.wasRemoved(mia)).toBe(false)
+    await other.clearRemoval(mia)
+    expect(await org.wasRemoved(mia)).toBe(true)
+    await org.clearRemoval(mia)
+    expect(await org.wasRemoved(mia)).toBe(false)
   })
 })
 

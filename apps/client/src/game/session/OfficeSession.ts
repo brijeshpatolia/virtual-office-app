@@ -22,9 +22,19 @@ export interface OfficeDebugSnapshot {
   // move:reject messages received from the server, and the last one.
   rejects: number
   lastReject: MoveReject | null
-  // walking: a walkTo is under way.
-  local: { x: number; y: number; dir: string; seatId: string; zoneId: string; status: string; walking: boolean } | null
-  players: Array<{ sessionId: string; userId: string; name: string; x: number; y: number; seatId: string; zoneId: string }>
+  // walking: a walkTo is under way. pose: what the own avatar shows ('idle', 'walk' or 'sit').
+  local: { x: number; y: number; dir: string; seatId: string; zoneId: string; status: string; walking: boolean; pose: string } | null
+  // The synced state of every player; rendered: where and how the other avatars are drawn now (null for the own one).
+  players: Array<{
+    sessionId: string
+    userId: string
+    name: string
+    x: number
+    y: number
+    seatId: string
+    zoneId: string
+    rendered: { x: number; y: number; dir: string; pose: string } | null
+  }>
   // seatId -> occupant userId ('' = free).
   seats: Record<string, string>
 }
@@ -46,6 +56,7 @@ export class OfficeSession {
   private localZoneId = ''
   private rejects = 0
   private lastReject: MoveReject | null = null
+  private reconnecting = false
 
   constructor(deps: OfficeSessionDeps) {
     this.deps = deps
@@ -77,6 +88,19 @@ export class OfficeSession {
     for (const { avatar } of this.remotes.values()) avatar.update(now)
   }
 
+  // While the SDK reconnects the own avatar stands still and sends nothing; afterwards it goes on from the
+  // server's position.
+  setReconnecting(reconnecting: boolean): void {
+    if (reconnecting === this.reconnecting) return
+    this.reconnecting = reconnecting
+    if (reconnecting) {
+      this.local?.pause()
+      return
+    }
+    const own = this.deps.link.state.players.get(this.deps.link.sessionId)
+    if (own) this.local?.resume(own)
+  }
+
   snapshot(): OfficeDebugSnapshot {
     const { link } = this.deps
     const own = link.state.players.get(link.sessionId)
@@ -95,6 +119,7 @@ export class OfficeSession {
               zoneId: own.zoneId,
               status: own.status,
               walking: this.local?.walking ?? false,
+              pose: this.local?.view.pose ?? 'idle',
             }
           : null,
       players: [...link.state.players].map(([sessionId, p]) => ({
@@ -105,6 +130,7 @@ export class OfficeSession {
         y: p.y,
         seatId: p.seatId,
         zoneId: p.zoneId,
+        rendered: this.remotes.get(sessionId)?.avatar.rendered ?? null,
       })),
       seats: Object.fromEntries([...link.state.seats].map(([seatId, seat]) => [seatId, seat.occupantId])),
     }

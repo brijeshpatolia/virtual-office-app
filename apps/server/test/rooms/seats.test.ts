@@ -28,6 +28,8 @@ beforeAll(async () => {
       { id: 't1', zoneId: 'open-plan', x: 804, y: 464, ...extra },
       // In the open plan, 32 px from the open-plan door.
       { id: 't2', zoneId: 'open-plan', x: 816, y: 400, ...extra },
+      // On the meeting table (furniture): the avatar stands up beside it.
+      { id: 't3', zoneId: 'meeting-room', x: 400, y: 560, ...extra },
     ],
   })
   rs = await startRoomServer(map)
@@ -57,7 +59,7 @@ describe('OfficeRoom seats', () => {
     expect(await sit(b, 'm1')).toEqual({ rejected: 'taken' })
 
     // Standing up keeps Ann where she sat (the seat is free floor) and frees the seat.
-    expect(await a.room.request(MSG.stand, {})).toEqual({ ok: true })
+    expect(await a.room.request(MSG.stand, {})).toEqual({ ok: true, x: 336, y: 516 })
     expect(a.server()).toMatchObject({ seatId: '', x: 336, y: 516 })
     await waitFor(() => seatState(b, 'm1') === '', 'ben to see m1 free')
     expect(await a.moveTo({ x: 336, y: 500 })).toBeNull()
@@ -66,6 +68,19 @@ describe('OfficeRoom seats', () => {
     // Leaving frees the seat as well.
     await b.leave()
     await waitFor(() => seatState(a, 'm1') === '', 'ann to see m1 free after ben left')
+    await a.leave()
+  })
+
+  it('answers where the avatar stands up when the seat itself is not free floor', async () => {
+    const officeId = newOffice()
+    const a = await rs.join(ann, officeId)
+    await a.walk(...toMeetingRoom, { x: 400, y: 516 })
+    expect(await sit(a, 't3')).toMatchObject({ ok: true, x: 400, y: 560 - FEET_OFFSET_Y })
+    const stand = (await a.room.request(MSG.stand, {})) as { ok: true; x: number; y: number }
+    expect(stand.y).not.toBe(560 - FEET_OFFSET_Y)
+    expect(a.server()).toMatchObject({ seatId: '', x: stand.x, y: stand.y })
+    // A walk from there passes.
+    expect(await a.moveTo({ x: stand.x, y: stand.y + FEET_OFFSET_Y - 8 })).toBeNull()
     await a.leave()
   })
 

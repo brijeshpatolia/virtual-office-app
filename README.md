@@ -42,6 +42,7 @@ You need no accounts, no database and no Docker for development.
 8. Walk with the arrow keys or WASD. Press E near a seat to sit down, and E again to stand up.
 9. To meet someone, click **Copy invite link** (as Member or Guest) and open the link in another browser or a private window.
    Sign in there with another email address, join, and you see each other walk and sit.
+   A link from the header works for 3 days and 10 people. **Links** lists the open links; **Revoke** ends one.
 
 The data stays in `.data/` (PGlite in `.data/pglite`). Delete the folder to start again with an empty database.
 
@@ -93,7 +94,7 @@ Run each script from the repository root with `npm run <name>`.
 | `dev`          | Starts the office server (port 2567) and the client (port 8000) together.                                      |
 | `dev:server`   | Starts only the office server. It restarts when a file changes and reads `apps/server/.env` if it exists.      |
 | `dev:client`   | Starts only the client. Vite sends `/api` and `/colyseus` to the office server.                                |
-| `start`        | Starts the office server without the file watcher.                                                             |
+| `start`        | Starts the office server without the file watcher. Set `NODE_ENV` first (the server refuses to start without it). |
 | `build`        | Builds the client into `apps/client/dist`, then starts and stops the server once under plain Node (see below). |
 | `preview`      | Serves the built client on port 8000.                                                                          |
 | `typecheck`    | Checks the types in all workspaces, the tests and the e2e tests.                                               |
@@ -140,7 +141,7 @@ That fails on syntax Node cannot strip and on imports Node cannot resolve, which
 │   │   │       ├── zoneToast.ts      'Entered Meeting room (group call later)'
 │   │   │       ├── avatar/           Placeholder avatars drawn by code (one module, to swap for real art)
 │   │   │       ├── player/           Own avatar: input, local physics, moves sent to the server
-│   │   │       ├── remote/           Other avatars, smoothed with a 100 ms buffer
+│   │   │       ├── remote/           Other avatars, smoothed with a 200 ms buffer (two patches)
 │   │   │       ├── session/          The connected office in the scene, presence reports
 │   │   │       ├── debug/            Map debug overlay
 │   │   │       └── scenes/
@@ -198,13 +199,14 @@ In development the browser talks only to http://localhost:8000. Vite forwards `/
 
 ### Environment variables
 
-In development every variable is optional. In production (`NODE_ENV=production`) the server refuses to start without the required ones, and it never prints or logs mail.
+`NODE_ENV` is always required (`npm run dev`, the tests and the e2e run set it), so a server never falls back to the development settings by mistake.
+In development every other variable is optional. In production (`NODE_ENV=production`) the server refuses to start without the required ones, and it never prints or logs mail.
 
 | Variable                                   | Development and tests                                    | Production                                                                 |
 | ------------------------------------------ | -------------------------------------------------------- | -------------------------------------------------------------------------- |
-| `NODE_ENV`                                 | `development` (tests: `test`)                            | `production`                                                               |
+| `NODE_ENV`                                 | Required: `development` (`npm run dev` sets it; tests: `test`) | Required: `production`                                               |
 | `PORT`                                     | `2567`                                                   | The port the host gives.                                                   |
-| `CLIENT_ORIGIN`                            | `http://localhost:8000`                                  | Set it: the public origin of the client. Only it may call the API with cookies, and invite links point to it. |
+| `CLIENT_ORIGIN`                            | `http://localhost:8000`                                  | Required: the public origin of the client. Only it may call the API with cookies, and invite links point to it. |
 | `BETTER_AUTH_URL`                          | `CLIENT_ORIGIN`                                          | Required: the public origin of `/api/auth`. Also the issuer of the realtime token. |
 | `BETTER_AUTH_SECRET`                       | A fixed development value                                | Required: at least 32 characters, not the development value.               |
 | `DATABASE_URL`                             | Unset: PGlite                                            | Required: a Postgres connection string.                                    |
@@ -226,11 +228,23 @@ The client reads two more variables. `VITE_SERVER_URL` (unset in development) is
 - Sign-in is by email code: 6 digits, valid for 5 minutes, stored hashed. A new email gets an account at its first sign-in. There are no passwords.
   Google sign-in appears when both Google variables are set (`GET /api/config` tells the client).
 - A company is a Better Auth organization with one office from the `startup-hq-40x30` template. Its creator is the owner.
+  Companies are created only through `POST /api/companies` (Better Auth's own `/organization/create` is off), at most 3 per owner.
   Roles: owner, admin, member and guest. Guests may enter only the lobby and the meeting room (an office setting can change the list).
-- Owners and admins create invite links (member or guest, 7 days by default; the server stores only a hash of the token) and email invitations (48 hours).
+  A member has exactly one of these roles: Better Auth refuses role lists such as `member, owner` or `owner ` (hooks in `auth.ts`).
+- Owners and admins create invite links (member or guest, 7 days and no use limit by default, 3 days and 10 people from the header; the server stores
+  only a hash of the token) and email invitations (48 hours). `GET /api/offices/:id/invite-links` lists the open links and
+  `DELETE /api/offices/:id/invite-links/:linkId` revokes one (the **Links** panel in the header).
+- Removing a member (Better Auth `remove-member`) records the removal: no invite link lets that person back in (403 `removed`), only an
+  email invitation that they accept. The links that a removed member, or a member who left, had created are revoked.
+- Guests cannot read the member list, the pending invitations or the full company (403 from `list-members`, `list-invitations` and
+  `get-full-organization`); the room shows them only names.
+- Names (yours, a company's, an office's) are 1 to 80 characters on one line. Invitation mails leave links and line breaks out of the names
+  in them, and go out at most 3 times per company and address and 20 times per inviter in 24 hours (resends included), and 10 times a minute per IP.
 - The office room accepts a 15-minute EdDSA token from `GET /api/rt-token` for one office (audience `vo-realtime`), and checks the user's current membership again.
   Better Auth's own session token endpoint (`/api/auth/token`) is off.
 - `POST` and the other non-GET calls to our `/api` routes must come from `CLIENT_ORIGIN` (`Origin` header), on top of the SameSite=Lax session cookie.
+- Request bodies: the server refuses a body over 64 KiB (413) and a body without `Content-Length` (411) before Better Auth or the Colyseus
+  matchmaker reads it; `/api` routes take at most 32 kB of JSON. Bad JSON, a too large body or an unknown encoding is a 4xx, never a 500.
 - Better Auth's rate limits are on everywhere. Development allows 30 codes and sign-ins per window instead of 3, because all local users share one address.
 - Office access is cached for 60 s and cleared at once when a member is removed, leaves or changes role, or the company is deleted.
   The room also checks every 60 s and closes the connection of someone who lost access (close code 4101).
@@ -239,7 +253,8 @@ The client reads two more variables. `VITE_SERVER_URL` (unset in development) is
 
 `packages/db` uses Drizzle. Without `DATABASE_URL` it opens PGlite in `PGLITE_DIR`; with it, Postgres (node-postgres).
 The server applies the migrations in `packages/db/drizzle` when it starts (on Postgres under a lock, so two servers can start together):
-`0000_init` (the Better Auth tables, offices, invite links, presence sessions and the audit log) and `0001_member_unique` (one membership per user and company).
+`0000_init` (the Better Auth tables, offices, invite links, presence sessions and the audit log), `0001_member_unique` (one membership per user and company)
+and `0002_member_removals` (members an owner or admin removed).
 
 After you change a table in `packages/db/src/schema`, write a migration with a name:
 
@@ -256,9 +271,15 @@ npm run generate --workspace @vo/db -- --name <name>
 One Colyseus room per office (`joinOrCreate('office', { officeId })`). The rules live in `@vo/shared` and `apps/server/src/rooms/OfficeRoom.ts`:
 
 - Join: a valid realtime token for this office, and a current member of the token's company. Anything else fails with code 525 and no reason.
-- One session per person: opening the office in a second tab closes the first one (close code 4100). A dropped connection keeps the avatar and its seat for 30 s.
-- Moves: at most 20 per second; each one is checked for speed (160 px/s with 25% slack, plus a distance budget), for a swept body against walls and furniture and the map edge, and for zone entry (guests, full rooms).
-- Seats: sit within 48 px of a free seat with a clear line through walls; standing up or leaving frees it.
+- One session per person: opening the office in a second tab closes the first one (close code 4100).
+  A dropped connection keeps the avatar and its seat for 30 s, but only when the SDK will try to reconnect (close codes 1001, 1005, 1006 and 4010).
+  Closing the tab leaves the room at once (the page leaves on `pagehide`).
+- Moves: 20 per second on average and up to 40 at once (a backlog after a network stall); each one is checked for speed (160 px/s with 25% slack,
+  plus a distance budget of 2 s), for a swept body against walls and furniture and the map edge, and for zone entry (guests, full rooms).
+  A refused move gets `move:reject` (the avatar stops for everyone and the client snaps back). Colyseus closes a client that sends more than 200 messages a second.
+- Seats: sit within 48 px of a free seat with a clear line through walls (the client offers it within 40 px and stops first); standing up or
+  leaving frees it, and the answer says where the avatar stands.
+- A member who becomes a guest while in a zone guests may not enter is sent back to the door: the room closes the connection (code 4102) and they enter again at the spawn.
 - Presence: away after 10 minutes without input, or 5 minutes with the tab hidden.
 - Each session gets a `presence_sessions` row while it is in the office.
 
@@ -269,15 +290,19 @@ One Colyseus room per office (`joinOrCreate('office', { officeId })`). The rules
 `npm run e2e` runs `e2e/office.spec.ts` in Chromium. Playwright starts its own office server (port 2600, `NODE_ENV=development`) and Vite client (port 8100),
 so it does not touch `npm run dev` or your `.data`. The server gets a fresh PGlite database in a temporary folder, which is removed at the end; the test reads the sign-in codes from its `dev-mail.log`.
 
-- Ann signs up with an email code, creates a company and an office, and copies a member invite link.
-- Bob opens the link in a second browser context, signs up, accepts and enters the office. Both see the other's avatar.
-- Ann walks with the keyboard and Bob sees her move; she enters the meeting room (toast) and the hallway; the wall stops her, and a move into it is rejected by the server and snaps her back.
-- Ann sits at desk d1 (E) and Bob sees the seat taken and her seated; she stands up again; both sign out.
+- Ann signs up with an email code, creates a company and an office, and copies a member invite link (3 days, 10 people).
+  She picks Guest: the arrow keys walk her and leave the role alone, and while the select has the focus they do not walk her. She copies a guest link and revokes it in **Links**.
+- Bob opens the member link in a second browser context, signs up, accepts and enters the office. Both see the other's avatar.
+- Ann walks with the keyboard and Bob sees her move; she enters the meeting room (toast) and the hallway; the wall stops her, and a move into it is rejected
+  by the server and snaps her back to the position in the reject, which Bob sees too (whatever the frame rate).
+- Ann sits at desk d1 (E) and Bob sees the seat taken and her avatar drawn seated there; she stands up again.
+- Bob closes his tab and Ann sees him go at once; Ann signs out.
 - Cleo, from another company, gets "Office not found" for Ann's office, no realtime token for it, and her own token does not open Ann's room.
 
 The doorways leave the avatar only 12 px of room, and headless Chromium with software rendering draws few frames, so a key goes up a frame or two late.
 Where the path is narrow the test therefore uses `window.__voOffice.walkTo(x, y)`: it exists only in development builds and walks in a straight line at normal speed,
-sending the same moves as the keyboard, which the server checks as usual. `window.__voOffice.snapshot()` shows the synced state for tests.
+sending the same moves as the keyboard, which the server checks as usual. `window.__voOffice.snapshot()` shows the synced state for tests,
+and for the other avatars where and how the page draws them (`rendered`: position, direction and pose `idle`, `walk` or `sit`).
 
 Playwright needs its Chromium: run `npx playwright install chromium` once. In a container that already has one, point the tests at it instead:
 
@@ -443,8 +468,10 @@ Done in P1a:
 - Accounts with email codes (Google when configured), companies with the roles owner, admin, member and guest, invite links and email invitations, onboarding (company and office from the template).
 - The database package: Drizzle schema and migrations for PGlite and Postgres, with every query scoped to a company or a user.
 - The office room: token and membership check at join, server-side moves (speed, swept body, move budget), zones with guest rules and room capacity, seats, presence with auto-away, reconnection for 30 s, one session per person, and removal of people who lost access.
-- The client: sign-in, name, onboarding and invite pages; placeholder avatars drawn by code with name tags and status dots; walking with local collision and snap-back on reject; smoothed remote avatars; sitting and standing with E; zone toasts; the camera follows your avatar.
-- Tests: about 330 unit and integration tests, and the two-browser e2e test. CI runs the check job and then the e2e job.
+- The client: sign-in, name, onboarding and invite pages; placeholder avatars drawn by code (standing, walking and seated) with name tags and status dots;
+  walking with local collision and snap-back on reject; smoothed remote avatars; sitting and standing with E; zone toasts; the camera follows your avatar;
+  the open invite links with Revoke.
+- Tests: about 370 unit and integration tests, and the two-browser e2e test. CI runs the check job and then the e2e job.
 
 P1b (deployment) will add:
 
@@ -458,6 +485,9 @@ Still open:
 - Phones: the office renders at zoom 1 with a compact header, but there is no touch or tap-to-walk movement yet (a later phase).
 - Presence rows of a server that crashed stay open; a clean-up at start comes later.
 - The Better Auth browser client does not know the guest role, so the invitation page types the role as owner, admin or member (display only).
+- There is no page yet to list, remove or re-invite members, or to send email invitations: owners and admins use the Better Auth endpoints
+  (`/api/auth/organization/remove-member`, `invite-member`) for now.
+- The limits on invitation mails are counted in the memory of the one server process; a restart resets them.
 
 ## Art and license
 

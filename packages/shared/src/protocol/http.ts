@@ -23,6 +23,8 @@ export const API = {
   office: (officeId: string) => `/api/offices/${encodeURIComponent(officeId)}`,
   inviteLinks: (officeId: string) => `/api/offices/${encodeURIComponent(officeId)}/invite-links`,
   inviteLink: (token: string) => `/api/invite-links/${encodeURIComponent(token)}`,
+  officeInviteLink: (officeId: string, linkId: string) =>
+    `/api/offices/${encodeURIComponent(officeId)}/invite-links/${encodeURIComponent(linkId)}`,
   acceptInviteLink: (token: string) => `/api/invite-links/${encodeURIComponent(token)}/accept`,
   rtToken: (officeId: string) => `/api/rt-token?officeId=${encodeURIComponent(officeId)}`,
 } as const
@@ -42,6 +44,9 @@ export const API_ERRORS = {
   forbidden: 403,
   not_found: 404,
   invite_invalid: 410,
+  length_required: 411,
+  payload_too_large: 413,
+  unsupported_media_type: 415,
   rate_limited: 429,
   internal: 500,
 } as const
@@ -52,7 +57,15 @@ export const ApiErrorSchema = z.object({
 })
 export type ApiError = z.infer<typeof ApiErrorSchema>
 
-const name = z.string().trim().min(1).max(80)
+// Display, company and office names: one line, at most NAME_MAX_LENGTH characters after trimming.
+export const NAME_MAX_LENGTH = 80
+export const NameSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(NAME_MAX_LENGTH)
+  .regex(/^[^\p{Cc}]*$/u, 'no control characters')
+const name = NameSchema
 const isoDate = z.iso.datetime()
 
 export const UserSummarySchema = z.object({
@@ -96,6 +109,25 @@ export type CreateInviteLinkRequest = z.infer<typeof CreateInviteLinkRequestSche
 export const CreateInviteLinkResponseSchema = z.object({ url: z.string(), token: z.string(), expiresAt: isoDate })
 export type CreateInviteLinkResponse = z.infer<typeof CreateInviteLinkResponseSchema>
 
+// GET /api/offices/:officeId/invite-links (owner or admin): the links that still let someone join, newest first.
+export const InviteLinkSummarySchema = z.object({
+  id: z.string(),
+  role: z.enum(INVITE_ROLES),
+  uses: z.number().int(),
+  maxUses: z.number().int().nullable(),
+  expiresAt: isoDate,
+  createdAt: isoDate,
+  createdBy: z.string(),
+})
+export type InviteLinkSummary = z.infer<typeof InviteLinkSummarySchema>
+export const ListInviteLinksResponseSchema = z.object({ links: z.array(InviteLinkSummarySchema) })
+export type ListInviteLinksResponse = z.infer<typeof ListInviteLinksResponseSchema>
+
+// DELETE /api/offices/:officeId/invite-links/:linkId (owner or admin). 404 when the link is not an open link of
+// this office.
+export const RevokeInviteLinkResponseSchema = z.object({ id: z.string(), revoked: z.literal(true) })
+export type RevokeInviteLinkResponse = z.infer<typeof RevokeInviteLinkResponseSchema>
+
 // GET /api/invite-links/:token (public). 404 for an unknown token; valid=false when expired, revoked or used up.
 export const InviteLinkInfoResponseSchema = z.object({
   companyName: z.string(),
@@ -106,7 +138,8 @@ export const InviteLinkInfoResponseSchema = z.object({
 export type InviteLinkInfoResponse = z.infer<typeof InviteLinkInfoResponseSchema>
 
 // POST /api/invite-links/:token/accept (signed in). 404 for an unknown token, 410 invite_invalid when expired,
-// revoked or used up. A user who is already a member gets 200 and the link keeps its uses.
+// revoked or used up, 403 forbidden (message 'removed') for someone an owner or admin removed from the company: only
+// an email invitation lets them back in. A user who is already a member gets 200 and the link keeps its uses.
 export const AcceptInviteLinkResponseSchema = z.object({ orgId: z.string(), officeId: z.string() })
 export type AcceptInviteLinkResponse = z.infer<typeof AcceptInviteLinkResponseSchema>
 

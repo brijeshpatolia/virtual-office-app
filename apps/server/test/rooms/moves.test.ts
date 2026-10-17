@@ -105,37 +105,65 @@ describe('OfficeRoom moves', () => {
     await a.walk(SPAWN)
     expect(await a.moveTo({ x: SPAWN.x + 200, y: SPAWN.y })).toMatchObject({ reason: 'speed', x: SPAWN.x })
     await a.walk({ x: 208, y: 368 })
-    // 20 px every 50 ms passes the per-move check (30 px) but is 400 px/s.
+    // 20 px every 10 ms passes the per-move check (22 px) but is 2000 px/s.
     let accepted = 0
     let reason: string | undefined
     for (let i = 1; i <= 30 && reason === undefined; i++) {
-      const reject = await a.moveTo({ x: 208 + 20 * i, y: 368 }, 50)
+      const reject = await a.moveTo({ x: 208 + 20 * i, y: 368 }, 10)
       if (reject === null) accepted++
       else reason = reject.reason
     }
     expect(reason).toBe('speed')
-    // Walking at full speed leaves 160 px of budget; each of these moves then costs 10 px net.
-    expect(accepted).toBe(16)
+    // The walk (40 px per 250 ms) leaves 360 of the 400 px budget; each of these moves then costs 18 px net.
+    expect(accepted).toBe(20)
     await a.leave()
   })
 
-  it('drops moves above the rate limit and ignores invalid ones', async () => {
+  it('rejects moves above the rate limit and ignores invalid ones', async () => {
     const officeId = newOffice()
     const a = await rs.join(ann, officeId)
     const start = a.server()
     const x0 = start.x
     const y0 = start.y
-    for (let seq = 1; seq <= 30; seq++) a.room.send(MSG.move, { x: x0 + seq * 0.5, y: y0, dir: 'right', moving: true, seq })
-    a.room.send(MSG.move, { x: 'far', y: y0, dir: 'right', moving: true, seq: 31 })
-    a.room.send(MSG.move, { x: x0, y: y0, dir: 'sideways', moving: true, seq: 32 })
-    await waitFor(() => Math.abs(a.server().x - (x0 + 10)) < 0.01, 'the first 20 moves')
+    // MOVE_BURST (40) moves at once pass; the client snaps back on the rest.
+    for (let seq = 1; seq <= 50; seq++) a.room.send(MSG.move, { x: x0 + seq * 0.5, y: y0, dir: 'right', moving: true, seq })
+    a.room.send(MSG.move, { x: 'far', y: y0, dir: 'right', moving: true, seq: 51 })
+    a.room.send(MSG.move, { x: x0, y: y0, dir: 'sideways', moving: true, seq: 52 })
+    await waitFor(() => a.rejects.length === 10, 'the rejects of moves 41 to 50')
     await sleep(100)
-    expect(a.server().x).toBeCloseTo(x0 + 10)
-    expect(a.rejects).toEqual([])
+    expect(a.server()).toMatchObject({ x: x0 + 20, moving: false })
+    expect(a.rejects.map((r) => r.seq)).toEqual([41, 42, 43, 44, 45, 46, 47, 48, 49, 50])
+    expect(a.rejects.every((r) => r.reason === 'speed' && r.x === x0 + 20 && r.y === y0)).toBe(true)
     // A second later the limit has refilled.
     expect(await a.moveTo({ x: x0 + 12, y: y0 + FEET_OFFSET_Y }, 1000)).toBeNull()
     expect(a.server().dir).toBe('down')
     expect(a.closeCode).toBeNull()
+    await a.leave()
+  })
+
+  it('stops the avatar for the others when a move is rejected', async () => {
+    const officeId = newOffice()
+    const g = await rs.join(gus, officeId)
+    const m = await rs.join(ann, officeId)
+    await g.walk({ x: 752, y: DOOR_ROW }, { x: 784, y: DOOR_ROW })
+    expect(g.server().moving).toBe(true)
+    await waitFor(() => m.room.state.players.get(g.sessionId)?.moving === true, 'ann to see gus walk')
+    // The open plan is closed to guests; the client snaps back and stands, so no stop move follows.
+    expect(await g.moveTo({ x: 800, y: DOOR_ROW })).toMatchObject({ reason: 'guest' })
+    expect(g.server().moving).toBe(false)
+    await waitFor(() => m.room.state.players.get(g.sessionId)?.moving === false, 'ann to see gus stand')
+    await Promise.all([g.leave(), m.leave()])
+  })
+
+  it('accepts the moves that arrive together after a network stall of 2 s', async () => {
+    const officeId = newOffice()
+    const a = await rs.join(ann, officeId)
+    await a.walk({ x: 208, y: 368 })
+    for (let i = 1; i <= 5; i++) expect(await a.moveTo({ x: 208 + 16 * i, y: 368 }, 100)).toBeNull()
+    // 2 s of moves (16 px every 100 ms) were stuck in the network and arrive at once.
+    rs.clock.advance(2000)
+    for (let i = 6; i <= 25; i++) expect(await a.moveTo({ x: 208 + 16 * i, y: 368 }, 0)).toBeNull()
+    expect(a.feet()).toEqual({ x: 608, y: 368 })
     await a.leave()
   })
 

@@ -38,8 +38,10 @@ export function speedAllowed(prev: Point, next: Point, prevServerMs: number, now
 
 // The jitter allowance in speedAllowed counts again on every move, so a client that sends often could reach about
 // 3 x MAX_SPEED with that check alone. A distance budget keeps the sustained speed at SPEED_CAP x MAX_SPEED: it
-// refills at that speed and holds one second of it, enough for moves that arrive in a burst after a short stall.
-export const MOVE_BUDGET_PX = MAX_SPEED * SPEED_CAP
+// refills at that speed and holds two seconds of it, so the moves that arrive in one burst after a network stall of
+// up to 2.5 s still pass. After a longer stall the client snaps back to the last accepted position.
+export const MOVE_BUDGET_SECONDS = 2
+export const MOVE_BUDGET_PX = MAX_SPEED * SPEED_CAP * MOVE_BUDGET_SECONDS
 
 export interface MoveBudget {
   px: number

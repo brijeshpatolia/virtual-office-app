@@ -10,6 +10,7 @@ import { createObstacles } from '../obstacles.ts'
 import { onSceneEnd } from '../onSceneEnd.ts'
 import type { MovementKeys } from '../player/LocalPlayer.ts'
 import { readOfficeMap } from '../readOfficeMap.ts'
+import { watchTyping } from '../typingFocus.ts'
 import { OfficeSession } from '../session/OfficeSession.ts'
 import { watchZoneHover } from '../zoneHover.ts'
 
@@ -70,6 +71,14 @@ export class OfficeScene extends Phaser.Scene {
       this.followed = null
     })
     this.keys = createMovementKeys(this)
+    // Keys typed into a form field (the invite role, a link to copy) do not walk the avatar.
+    const keyboard = this.input.keyboard
+    const stopWatching = watchTyping((typing) => {
+      if (!keyboard) return
+      keyboard.enabled = !typing
+      if (typing) keyboard.resetKeys()
+    })
+    onSceneEnd(this, stopWatching)
 
     this.debugOverlay = new MapDebugOverlay(this, this.officeMap)
     this.setMapDebug(mapDebugFromQuery(window.location.search))
@@ -96,6 +105,10 @@ export class OfficeScene extends Phaser.Scene {
       keys: this.keys,
       follow: (sprite) => this.follow(sprite),
     })
+  }
+
+  setReconnecting(reconnecting: boolean) {
+    this.session?.setReconnecting(reconnecting)
   }
 
   // Back to the empty map (left the room, connection lost).
@@ -128,6 +141,7 @@ export class OfficeScene extends Phaser.Scene {
 }
 
 // Arrow keys and WASD, E to sit or stand. No capture: the keys still reach the page (buttons, later the chat).
+// While a form field has focus the scene ignores the keyboard (watchTyping).
 function createMovementKeys(scene: Phaser.Scene): MovementKeys {
   const keyboard = scene.input.keyboard
   if (!keyboard) throw new Error('The office scene needs keyboard input')

@@ -1,4 +1,5 @@
 import {
+  CloseCode,
   Deferred,
   ErrorCode,
   Room,
@@ -15,6 +16,7 @@ import {
   JoinOptionsSchema,
   MAIN_SPAWN_ID,
   MAX_MESSAGES_PER_SECOND,
+  MOVE_BURST,
   MOVE_RATE_HZ,
   MSG,
   MoveMessageSchema,
@@ -75,8 +77,16 @@ export interface RoomAuth {
 
 export type OfficeClient = Client<{ auth: RoomAuth; messages: ServerMessages }>
 
-// The client sends MOVE_RATE_HZ moves plus one per stop or turn; moves above this rate are dropped.
+// The client sends MOVE_RATE_HZ moves plus one per stop or turn. Above this rate (and MOVE_BURST at once) a move
+// gets move:reject 'speed'.
 export const MOVE_LIMIT_PER_SECOND = 2 * MOVE_RATE_HZ
+// The close codes after which the SDK reconnects by itself; only for these the room keeps a dropped player.
+const RECONNECTING_CLOSE_CODES: ReadonlySet<number> = new Set([
+  CloseCode.GOING_AWAY,
+  CloseCode.NO_STATUS_RECEIVED,
+  CloseCode.ABNORMAL_CLOSURE,
+  CloseCode.MAY_TRY_RECONNECT,
+])
 // How often the room checks that every user still has access to the office (removed members are closed with
 // ROOM_CLOSE.removed).
 export const ACCESS_RECHECK_MS = 60_000
@@ -121,7 +131,7 @@ interface Session {
 
 function takeToken(bucket: RateBucket, nowMs: number): boolean {
   const refill = (Math.max(0, nowMs - bucket.atMs) * MOVE_LIMIT_PER_SECOND) / 1000
-  bucket.tokens = Math.min(MOVE_LIMIT_PER_SECOND, bucket.tokens + refill)
+  bucket.tokens = Math.min(MOVE_BURST, bucket.tokens + refill)
   bucket.atMs = Math.max(nowMs, bucket.atMs)
   if (bucket.tokens < 1) return false
   bucket.tokens -= 1
@@ -186,7 +196,7 @@ export function createOfficeRoom(deps: OfficeRoomDeps) {
       this.onMessage(MSG.move, (client, message) => this.#move(client, message))
       this.onMessage(MSG.activity, (client, message) => this.#activity(client, message))
       this.onMessage(MSG.sit, (client, message, ctx) => this.#sit(client, message, ctx))
-      this.onMessage(MSG.stand, (client) => this.#stand(client))
+      this.onMessage(MSG.stand, (client, _message, ctx) => this.#stand(client, ctx))
       this.clock.setInterval(() => this.#tick(), TICK_MS)
     }
 
@@ -215,7 +225,7 @@ export function createOfficeRoom(deps: OfficeRoomDeps) {
         pos,
         movedAt: at,
         budget: fullMoveBudget(at),
-        moves: { tokens: MOVE_LIMIT_PER_SECOND, atMs: at },
+        moves: { tokens: MOVE_BURST, atMs: at },
         zones,
         activeAt: at,
         hiddenSince: null,
@@ -228,11 +238,14 @@ export function createOfficeRoom(deps: OfficeRoomDeps) {
       this.state.players.set(client.sessionId, player)
     }
 
-    // A connection closed without consent: keep the player for RECONNECT_SECONDS.
-    override onDrop(client: OfficeClient) {
+    // A connection closed without consent: keep the player for RECONNECT_SECONDS, if the SDK will try to reconnect.
+    // Otherwise (e.g. 4002 after too many messages) Colyseus calls onLeave next, which removes the player.
+    override onDrop(client: OfficeClient, code?: number) {
       const session = this.#sessions.get(client.sessionId)
-      if (session === undefined) return
+      if (session === undefined || code === undefined || !RECONNECTING_CLOSE_CODES.has(code)) return
       session.client = null
+      const player = this.state.players.get(client.sessionId)
+      if (player !== undefined) player.moving = false
       const reconnection = this.allowReconnection(client, RECONNECT_SECONDS)
       // allowReconnection hands back a plain rejected promise when the client never finished joining; onLeave follows.
       if (reconnection instanceof Deferred) session.reconnection = reconnection
@@ -304,11 +317,13 @@ export function createOfficeRoom(deps: OfficeRoomDeps) {
       if (found === null || !parsed.success) return
       const { session, player } = found
       const at = now()
-      if (!takeToken(session.moves, at)) return
-      this.#markActive(session, player, at)
       const move = parsed.data
-      const verdict = this.#checkMove(session, player, move, at)
+      const allowed = takeToken(session.moves, at)
+      if (allowed) this.#markActive(session, player, at)
+      const verdict = allowed ? this.#checkMove(session, player, move, at) : 'speed'
       if (typeof verdict === 'string') {
+        // The client snaps back to the last accepted position and stands there.
+        player.moving = false
         client.send(MSG.moveReject, { x: session.pos.x, y: session.pos.y, seq: move.seq, reason: verdict })
         return
       }
@@ -390,9 +405,9 @@ export function createOfficeRoom(deps: OfficeRoomDeps) {
       return response
     }
 
-    #stand(client: OfficeClient): StandResponse {
+    #stand(client: OfficeClient, ctx: MessageContext) {
       const found = this.#lookup(client)
-      if (found === null) return { ok: true }
+      if (found === null) return ctx.reject('invalid')
       const { session, player } = found
       const at = now()
       this.#markActive(session, player, at)
@@ -400,7 +415,8 @@ export function createOfficeRoom(deps: OfficeRoomDeps) {
       if (player.seatId !== '') this.#freeSeat(player.seatId, session.userId)
       player.seatId = ''
       if (seat !== undefined) this.#place(session, player, nearestFreeStandSpot(map, walkGrid, seat), player.dir, at)
-      return { ok: true }
+      const response: StandResponse = { ok: true, x: session.pos.x, y: session.pos.y }
+      return response
     }
 
     #freeSeat(seatId: string, userId: string) {
@@ -434,12 +450,24 @@ export function createOfficeRoom(deps: OfficeRoomDeps) {
             return undefined
           })
           if (access === undefined || this.#sessions.get(session.sessionId) !== session) continue
-          if (access === null || access.orgId !== this.#orgId) this.#close(session, ROOM_CLOSE.removed)
-          else session.role = access.role
+          if (access === null || access.orgId !== this.#orgId) {
+            this.#close(session, ROOM_CLOSE.removed)
+            continue
+          }
+          const changed = access.role !== session.role
+          session.role = access.role
+          // Demoted to guest inside a zone guests may not enter: they enter the office again, at the spawn.
+          if (changed && this.#forbiddenWhereItIs(session)) this.#close(session, ROOM_CLOSE.roleChanged)
         }
       } finally {
         this.#checkingAccess = false
       }
+    }
+
+    #forbiddenWhereItIs(session: Session): boolean {
+      const zone = zoneAt(map, session.pos.x, session.pos.y + FEET_OFFSET_Y)
+      const ctx = { isGuest: session.role === 'guest', guestZoneTypes: this.#guestZoneTypes, occupants: 0 }
+      return zone !== null && zoneEntryBlock(zone, ctx) === 'guest'
     }
 
     // Ends a session at once: its connection closes with `code`, a pending reconnection is cancelled.

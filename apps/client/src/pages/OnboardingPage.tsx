@@ -3,8 +3,8 @@ import { CLIENT_ROUTES, type MeResponse } from '@vo/shared'
 import { createCompany } from '../api/endpoints.ts'
 import { errorMessage } from '../api/http.ts'
 import { Link, navigate } from '../router/navigation.tsx'
-import { buttonStyle, disabled, errorStyle, inputStyle, labelStyle, textStyle, titleStyle } from '../ui/pageStyles.ts'
-import { Page, SignedIn } from './common.tsx'
+import { buttonStyle, disabled, inputStyle, labelStyle, textStyle, titleStyle } from '../ui/pageStyles.ts'
+import { fieldErrorProps, FormError, Page, SignedIn } from './common.tsx'
 
 export function OnboardingPage() {
   return <SignedIn>{(me) => <CreateCompanyForm me={me} />}</SignedIn>
@@ -45,6 +45,7 @@ function CreateCompanyForm({ me }: { me: MeResponse }) {
             required
             autoFocus
             data-testid="company-name"
+            {...fieldErrorProps('onboarding-error', error)}
           />
         </label>
         <label style={labelStyle}>
@@ -56,9 +57,10 @@ function CreateCompanyForm({ me }: { me: MeResponse }) {
             maxLength={80}
             required
             data-testid="office-name"
+            {...fieldErrorProps('onboarding-error', error)}
           />
         </label>
-        {error && <p style={errorStyle}>{error}</p>}
+        <FormError id="onboarding-error" error={error} />
         <button
           type="submit"
           style={disabled(buttonStyle, busy)}

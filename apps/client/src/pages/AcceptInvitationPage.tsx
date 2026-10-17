@@ -5,8 +5,8 @@ import { fetchMe } from '../api/endpoints.ts'
 import { errorMessage } from '../api/http.ts'
 import { useResource } from '../hooks/useResource.ts'
 import { navigate } from '../router/navigation.tsx'
-import { buttonStyle, disabled, errorStyle, textStyle, titleStyle } from '../ui/pageStyles.ts'
-import { Message, Page, SignedIn } from './common.tsx'
+import { buttonStyle, disabled, textStyle, titleStyle } from '../ui/pageStyles.ts'
+import { FormError, Message, Page, SignedIn } from './common.tsx'
 
 async function loadInvitation(id: string) {
   const invitation = await unwrap(authClient.organization.getInvitation({ query: { id } }))
@@ -57,7 +57,7 @@ function Invitation({ invitationId, me }: { invitationId: string; me: MeResponse
       <p style={textStyle}>
         You are invited as <strong>{role}</strong>.
       </p>
-      {error && <p style={errorStyle}>{error}</p>}
+      <FormError id="invitation-error" error={error} />
       <button type="button" style={disabled(buttonStyle, busy)} disabled={busy} onClick={accept} data-testid="invitation-accept">
         Accept invitation
       </button>

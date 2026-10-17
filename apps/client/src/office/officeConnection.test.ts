@@ -27,6 +27,7 @@ describe('leaveReason', () => {
     expect(leaveReason(4000)).toBe('left')
     expect(leaveReason(ROOM_CLOSE.replaced)).toBe('replaced')
     expect(leaveReason(ROOM_CLOSE.removed)).toBe('removed')
+    expect(leaveReason(ROOM_CLOSE.roleChanged)).toBe('role_changed')
     expect(leaveReason(4003)).toBe('lost')
     expect(leaveReason(1006)).toBe('lost')
   })
@@ -37,6 +38,7 @@ describe('isAccessDenied', () => {
     expect(isAccessDenied(matchMakeError(MATCHMAKE_AUTH_FAILED))).toBe(true)
     expect(isAccessDenied(matchMakeError(523))).toBe(false)
     expect(isAccessDenied(new ApiRequestError(404, 'not_found', 'x'))).toBe(true)
+    expect(isAccessDenied(new ApiRequestError(401, 'unauthorized', 'x'))).toBe(false)
     expect(isAccessDenied(new ApiRequestError(0, 'network', 'x'))).toBe(false)
   })
 })
@@ -76,6 +78,14 @@ describe('OfficeConnection', () => {
     failed.connect()
     await tick()
     expect(failed.getState()).toMatchObject({ kind: 'closed', reason: 'error' })
+
+    // The token route answers 401 once the session is gone (signed out elsewhere, expired).
+    const signedOut = new OfficeConnection('o1', async () => {
+      throw new ApiRequestError(401, 'unauthorized', 'Please sign in.')
+    }, async () => fakeHandle().handle)
+    signedOut.connect()
+    await tick()
+    expect(signedOut.getState()).toMatchObject({ kind: 'closed', reason: 'signed_out' })
   })
 
   it('leaves a room that finishes joining after disconnect()', async () => {

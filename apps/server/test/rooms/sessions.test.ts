@@ -1,6 +1,6 @@
-import { matchMaker } from '@colyseus/core'
+import { CloseCode, matchMaker } from '@colyseus/core'
 import { Callbacks } from '@colyseus/sdk'
-import { AWAY_AFTER_MS, HIDDEN_AWAY_AFTER_MS, MSG, ROOM_CLOSE } from '@vo/shared'
+import { AWAY_AFTER_MS, HIDDEN_AWAY_AFTER_MS, MAX_MESSAGES_PER_SECOND, MSG, ROOM_CLOSE } from '@vo/shared'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { ACCESS_RECHECK_MS } from '../../src/rooms/OfficeRoom.ts'
 import { loadMap, seatState, sleep, startRoomServer, waitFor, type RoomServer, type TestPlayer, type TestUser } from './harness.ts'
@@ -73,7 +73,7 @@ describe('OfficeRoom sessions', () => {
     expect(a.server()).toMatchObject({ userId: 'u-ann', seatId: 'm1', x: 336, y: 516 })
     expect(seatState(b, 'm1')).toBe('u-ann')
     expect(removed).toBe(0)
-    expect(await a.room.request(MSG.stand, {})).toEqual({ ok: true })
+    expect(await a.room.request(MSG.stand, {})).toEqual({ ok: true, x: 336, y: 516 })
     expect(await a.moveTo({ x: 336, y: 500 })).toBeNull()
     await Promise.all([a.leave(), b.leave()])
   })
@@ -93,6 +93,19 @@ describe('OfficeRoom sessions', () => {
     expect(usersIn(b)).toEqual(['u-ann', 'u-ben'])
     await waitFor(() => seatState(b, 'm1') === '', 'ben to see m1 free')
     await Promise.all([b.leave(), second.leave()])
+  })
+
+  it('removes at once a client that Colyseus closed for sending too many messages', async () => {
+    const officeId = newOffice()
+    const a = await rs.join(ann, officeId)
+    const b = await rs.join(ben, officeId)
+    for (let i = 0; i < MAX_MESSAGES_PER_SECOND + 10; i++) a.room.send(MSG.activity, { hidden: false })
+    await waitFor(() => a.closeCode !== null, 'ann to be closed')
+    expect(a.closeCode).toBe(CloseCode.WITH_ERROR)
+    // The SDK does not reconnect after 4002, so the room keeps no ghost for RECONNECT_SECONDS.
+    await waitFor(() => !b.room.state.players.has(a.sessionId), 'ben to see ann go', 1000)
+    expect(usersIn(b)).toEqual(['u-ben'])
+    await b.leave()
   })
 
   it('records presence_sessions rows for joins and leaves', async () => {
@@ -143,5 +156,23 @@ describe('OfficeRoom sessions', () => {
     expect(await b.moveTo({ x: 752, y: 440 })).toMatchObject({ reason: 'guest' })
     expect(b.closeCode).toBeNull()
     await b.leave()
+  })
+
+  it('sends a member who becomes a guest inside a members-only zone back to the door', async () => {
+    const officeId = newOffice()
+    const a = await rs.join(ann, officeId)
+    const b = await rs.join(ben, officeId)
+    await b.walk({ x: 752, y: 400 }, { x: 816, y: 400 }, { x: 880, y: 464 })
+    expect(b.server().zoneId).toBe('open-plan')
+    rs.grant(ben, officeId, 'guest')
+    rs.clock.advance(ACCESS_RECHECK_MS)
+    await waitFor(() => b.closeCode !== null, 'ben to be closed')
+    expect(b.closeCode).toBe(ROOM_CLOSE.roleChanged)
+    await waitFor(() => !a.room.state.players.has(b.sessionId), 'ann to see ben go')
+    // He enters again at the spawn, as a guest.
+    const again = await rs.join(ben, officeId)
+    expect(again.server().zoneId).toBe('lobby')
+    expect(await again.walk({ x: 752, y: 400 }, { x: 784, y: 400 }).then(() => again.moveTo({ x: 816, y: 400 }))).toMatchObject({ reason: 'guest' })
+    await Promise.all([a.leave(), again.leave()])
   })
 })

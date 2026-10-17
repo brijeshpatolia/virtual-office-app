@@ -6,6 +6,7 @@ import {
   CLIENT_ROUTES,
   CreateCompanyRequestSchema,
   CreateInviteLinkRequestSchema,
+  NAME_MAX_LENGTH,
   RtTokenQuerySchema,
   TEMPLATE_ID,
   type AcceptInviteLinkResponse,
@@ -14,8 +15,10 @@ import {
   type CreateCompanyResponse,
   type CreateInviteLinkResponse,
   type InviteLinkInfoResponse,
+  type ListInviteLinksResponse,
   type MeResponse,
   type OfficeResponse,
+  type RevokeInviteLinkResponse,
   type RtTokenResponse,
 } from '@vo/shared'
 import { isAPIError } from 'better-auth/api'
@@ -106,10 +109,13 @@ export function registerRoutes(app: Application, deps: RouteDeps): void {
       if (!body.success) return sendError(res, 'invalid_request')
       const { companyName, officeName } = body.data
       // The caller becomes the owner, and the company becomes the session's active organization.
-      const org = await auth.api.createOrganization({
-        body: { name: companyName, slug: slugFor(companyName) },
-        headers: fromNodeHeaders(req.headers),
-      })
+      const org = await auth.api
+        .createOrganization({ body: { name: companyName, slug: slugFor(companyName) }, headers: fromNodeHeaders(req.headers) })
+        .catch((error: unknown) => {
+          if (isAPIError(error) && error.body?.code === 'YOU_HAVE_REACHED_THE_MAXIMUM_NUMBER_OF_ORGANIZATIONS') return null
+          throw error
+        })
+      if (org === null) return sendError(res, 'forbidden', 'company_limit')
       const tenant = forOrg(db, org.id)
       const office = await tenant.createOffice({ name: officeName, templateId: TEMPLATE_ID, templateVersion: TEMPLATE_VERSION }).catch(
         async (error: unknown) => {
@@ -135,12 +141,58 @@ export function registerRoutes(app: Application, deps: RouteDeps): void {
     }),
   )
 
+  // The office of the route and the caller's access to it; null (404 sent) when the caller is not a member.
+  const officeOf = async (req: Request, res: Response, userId: string) => {
+    const officeId = IdSchema.safeParse(req.params.officeId)
+    const access = officeId.success ? await getOfficeAccess(userId, officeId.data) : null
+    if (!access || !officeId.success) {
+      sendError(res, 'not_found')
+      return null
+    }
+    return { officeId: officeId.data, ...access }
+  }
+
+  app.get(
+    '/api/offices/:officeId/invite-links',
+    signedIn(async (req, res, { user }) => {
+      const office = await officeOf(req, res, user.id)
+      if (!office) return
+      if (!can(office.role, 'invite')) return sendError(res, 'forbidden')
+      const links = await forOrg(db, office.orgId).listActiveInviteLinks(office.officeId)
+      res.json({
+        links: links.map((link) => ({
+          id: link.id,
+          role: link.role,
+          uses: link.uses,
+          maxUses: link.maxUses,
+          expiresAt: link.expiresAt.toISOString(),
+          createdAt: link.createdAt.toISOString(),
+          createdBy: displayName({ name: link.creatorName, email: '' }),
+        })),
+      } satisfies ListInviteLinksResponse)
+    }),
+  )
+
+  app.delete(
+    '/api/offices/:officeId/invite-links/:linkId',
+    signedIn(async (req, res, { user }) => {
+      const office = await officeOf(req, res, user.id)
+      if (!office) return
+      if (!can(office.role, 'invite')) return sendError(res, 'forbidden')
+      const linkId = IdSchema.safeParse(req.params.linkId)
+      const tenant = forOrg(db, office.orgId)
+      if (!linkId.success || !(await tenant.revokeInviteLink(office.officeId, linkId.data))) return sendError(res, 'not_found')
+      await tenant.audit({ actorId: user.id, action: 'invite_link.revoke', targetType: 'invite_link', targetId: linkId.data })
+      res.json({ id: linkId.data, revoked: true } satisfies RevokeInviteLinkResponse)
+    }),
+  )
+
   app.post(
     '/api/offices/:officeId/invite-links',
     signedIn(async (req, res, { user }) => {
-      const officeId = IdSchema.safeParse(req.params.officeId)
-      const access = officeId.success ? await getOfficeAccess(user.id, officeId.data) : null
-      if (!access || !officeId.success) return sendError(res, 'not_found')
+      const office = await officeOf(req, res, user.id)
+      if (!office) return
+      const { officeId, ...access } = office
       if (!can(access.role, 'invite')) return sendError(res, 'forbidden')
       const body = CreateInviteLinkRequestSchema.safeParse(req.body)
       if (!body.success) return sendError(res, 'invalid_request')
@@ -150,7 +202,7 @@ export function registerRoutes(app: Application, deps: RouteDeps): void {
       const expiresAt = new Date(Date.now() + (body.data.expiresInHours ?? DEFAULT_INVITE_LINK_HOURS) * 3_600_000)
       const tenant = forOrg(db, access.orgId)
       const link = await tenant.createInviteLink({
-        officeId: officeId.data,
+        officeId,
         tokenHash: hashToken(token),
         role,
         maxUses: maxUses ?? null,
@@ -197,6 +249,7 @@ export function registerRoutes(app: Application, deps: RouteDeps): void {
         res.json(joined)
         return
       }
+      if (await tenant.wasRemoved(user.id)) return sendError(res, 'forbidden', 'removed')
       if (!(await tenant.consumeInviteLink(link.id))) return sendError(res, 'invite_invalid')
       try {
         await auth.api.addMember({ body: { userId: user.id, role: link.role, organizationId: link.orgId } })
@@ -244,9 +297,10 @@ export function hashToken(token: string): string {
   return createHash('sha256').update(token).digest('hex')
 }
 
-// Never empty: a new email-OTP user has name '' until they set one.
+// Never empty and at most NAME_MAX_LENGTH characters: a new email-OTP user has name '' until they set one.
 export function displayName(user: { name: string; email: string }): string {
-  return user.name.trim() || user.email.split('@')[0] || 'Someone'
+  const name = user.name.trim() || user.email.split('@')[0] || 'Someone'
+  return name.slice(0, NAME_MAX_LENGTH)
 }
 
 // Slugs are unique in Better Auth; the random part keeps two companies with the same name apart.

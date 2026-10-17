@@ -21,7 +21,7 @@ import type { JoinOffice, OfficeConnectionHandle, OfficeLink, Unsubscribe } from
 
 // DEV ONLY: a stand-in for the office server, so the office renders without accounts or a running server
 // (route /dev/office). It accepts moves along clear lines, computes zones, handles seats and walks two bots.
-// window.__voMock: close(code) simulates a server close (4100 replaced, 4101 removed, 4001 shutdown), drop() a
+// window.__voMock: close(code) simulates a server close (4100 replaced, 4101 removed, 4102 role changed, 4001 shutdown), drop() a
 // dropped connection, rejectTo(x, y) a move:reject that snaps the own avatar to (x, y).
 
 type MutablePlayer = { -readonly [K in keyof PlayerState]: PlayerState[K] }
@@ -116,7 +116,7 @@ class MockOffice {
       },
       stand: async () => {
         this.unseat(this.own)
-        return { ok: true as const }
+        return { ok: true as const, x: this.own.x, y: this.own.y }
       },
     }
     Object.assign(window, {

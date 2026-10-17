@@ -6,7 +6,6 @@ import { navigate } from '../router/navigation.tsx'
 import {
   buttonStyle,
   disabled,
-  errorStyle,
   inputStyle,
   labelStyle,
   linkButtonStyle,
@@ -14,7 +13,7 @@ import {
   textStyle,
   titleStyle,
 } from '../ui/pageStyles.ts'
-import { Page, Redirect, useMe } from './common.tsx'
+import { fieldErrorProps, FormError, Page, Redirect, useMe } from './common.tsx'
 
 const formStyle = { display: 'flex', flexDirection: 'column', gap: 12 } as const
 const OTP_LENGTH = 6
@@ -93,9 +92,10 @@ export function LoginPage({ next }: { next: string }) {
               required
               autoFocus
               data-testid="login-email"
+              {...fieldErrorProps('login-error', error)}
             />
           </label>
-          {error && <p style={errorStyle}>{error}</p>}
+          <FormError id="login-error" error={error} />
           <button type="submit" style={disabled(buttonStyle, busy)} disabled={busy} data-testid="login-send-code">
             Email me a code
           </button>
@@ -126,9 +126,10 @@ export function LoginPage({ next }: { next: string }) {
               required
               autoFocus
               data-testid="login-code"
+              {...fieldErrorProps('login-error', error)}
             />
           </label>
-          {error && <p style={errorStyle}>{error}</p>}
+          <FormError id="login-error" error={error} />
           <button
             type="submit"
             style={disabled(buttonStyle, busy || code.length !== OTP_LENGTH)}

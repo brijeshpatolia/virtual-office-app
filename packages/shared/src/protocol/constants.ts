@@ -17,8 +17,13 @@ export const MOVE_INTERVAL_MS = 1000 / MOVE_RATE_HZ
 export const MOVE_JITTER_MS = 100
 // The elapsed time counts at most this much, so standing still never buys a long jump.
 export const MOVE_MAX_DT_MS = 250
-// Room.maxMessagesPerSecond. Colyseus disconnects a client that sends more.
-export const MAX_MESSAGES_PER_SECOND = 40
+// Room.maxMessagesPerSecond. Colyseus disconnects a client that sends more (close code 4002, no reconnect). Far above
+// what an honest client sends, also when a network stall delivers several seconds of messages at once; the room
+// limits moves itself (MOVE_BURST).
+export const MAX_MESSAGES_PER_SECOND = 200
+// The room accepts MOVE_RATE_HZ x 2 moves per second on average and up to MOVE_BURST at once (a backlog after a
+// stall). It answers a move above that with move:reject 'speed'.
+export const MOVE_BURST = 40
 
 // Arcade body of the avatar, relative to its position (the sprite centre). The body centre is the feet point.
 export const PLAYER_BODY = { w: 20, h: 12, offsetY: FEET_OFFSET_Y } as const
@@ -45,4 +50,6 @@ export const ROOM_CLOSE = {
   replaced: 4100,
   // The user lost access to the office (removed from the company).
   removed: 4101,
+  // The user's role changed and they stood where the new role may not be; they enter again at the spawn.
+  roleChanged: 4102,
 } as const

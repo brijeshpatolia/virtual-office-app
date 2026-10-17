@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { PLAYER_BODY } from '@vo/shared'
-import { AVATAR_COLUMNS, AVATAR_FEET_ROW, AVATAR_FRAME, AVATAR_ROWS, avatarFrameIndex, parseHexColor, renderAvatarSheet } from './avatarArt.ts'
+import { AVATAR_COLUMNS, AVATAR_FEET_ROW, AVATAR_FRAME, AVATAR_ROWS, avatarFrameIndex, parseHexColor, renderAvatarSheet, SIT_COLUMN } from './avatarArt.ts'
 
 const sheet = renderAvatarSheet('#4363d8')
 
@@ -17,12 +17,13 @@ function framePixels(row: number, column: number): number[][] {
 const opaque = (pixels: number[][]) => pixels.filter((p) => p[5] === 255)
 
 describe('renderAvatarSheet', () => {
-  it('lays out 4 directions x (idle + 3 walk frames) of 32x48', () => {
+  it('lays out 4 directions x (idle + 3 walk frames + seated) of 32x48', () => {
     expect(sheet.width).toBe(AVATAR_FRAME.width * AVATAR_COLUMNS)
     expect(sheet.height).toBe(AVATAR_FRAME.height * AVATAR_ROWS.length)
     expect(sheet.data.length).toBe(sheet.width * sheet.height * 4)
     expect(avatarFrameIndex('down', 0)).toBe(0)
-    expect(avatarFrameIndex('up', 3)).toBe(15)
+    expect(avatarFrameIndex('up', 3)).toBe(18)
+    expect(avatarFrameIndex('up', SIT_COLUMN)).toBe(19)
   })
 
   it('puts the feet at the bottom of the physics body', () => {
@@ -48,6 +49,15 @@ describe('renderAvatarSheet', () => {
     for (const [x, y, ...rgba] of left) {
       const mirrored = right[(y as number) * AVATAR_FRAME.width + (AVATAR_FRAME.width - 1 - (x as number))]
       expect(mirrored?.slice(2)).toEqual(rgba)
+    }
+  })
+
+  it('draws a seated frame that differs from standing, in every direction', () => {
+    const key = (pixels: number[][]) => pixels.map((p) => p.slice(2).join(',')).join(';')
+    for (let row = 0; row < AVATAR_ROWS.length; row++) {
+      expect(key(framePixels(row, SIT_COLUMN))).not.toBe(key(framePixels(row, 0)))
+      const seatedBottom = Math.max(...opaque(framePixels(row, SIT_COLUMN)).map((p) => p[1] as number))
+      expect(seatedBottom).toBeLessThanOrEqual(AVATAR_FEET_ROW)
     }
   })
 

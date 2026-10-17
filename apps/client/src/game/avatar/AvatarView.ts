@@ -2,7 +2,9 @@ import Phaser from 'phaser'
 import type { Facing, PlayerStatus } from '@vo/shared'
 import { avatarDepth, DEPTH } from '../depth.ts'
 import { AVATAR_FRAME } from './avatarArt.ts'
-import { ensureAvatarTexture, idleFrame, walkAnimKey } from './avatarTextures.ts'
+import { ensureAvatarTexture, idleFrame, sitFrame, walkAnimKey } from './avatarTextures.ts'
+
+export type AvatarPose = 'idle' | 'walk' | 'sit'
 
 export interface AvatarLook {
   name: string
@@ -34,7 +36,7 @@ export class AvatarView {
   private textureKey: string
   private look: AvatarLook
   private dir: Facing
-  private moving = false
+  private posture: AvatarPose = 'idle'
 
   constructor(scene: Phaser.Scene, look: AvatarLook, dir: Facing, makeSprite: SpriteFactory) {
     this.look = copyLook(look)
@@ -52,10 +54,14 @@ export class AvatarView {
     return this.dir
   }
 
+  get pose(): AvatarPose {
+    return this.posture
+  }
+
   setLook(look: AvatarLook): void {
     if (look.color !== this.look.color) {
       this.textureKey = ensureAvatarTexture(this.sprite.scene, look.color)
-      this.sprite.setTexture(this.textureKey, idleFrame(this.dir))
+      this.sprite.setTexture(this.textureKey, this.posture === 'sit' ? sitFrame(this.dir) : idleFrame(this.dir))
       this.applyPose(true)
     }
     if (look.name !== this.look.name) this.tag.setText(look.name)
@@ -64,10 +70,12 @@ export class AvatarView {
     this.look = copyLook(look)
   }
 
-  setPose(dir: Facing, moving: boolean): void {
-    if (dir === this.dir && moving === this.moving) return
+  // Seated wins over moving.
+  setPose(dir: Facing, moving: boolean, seated = false): void {
+    const posture: AvatarPose = seated ? 'sit' : moving ? 'walk' : 'idle'
+    if (dir === this.dir && posture === this.posture) return
     this.dir = dir
-    this.moving = moving
+    this.posture = posture
     this.applyPose(false)
   }
 
@@ -86,11 +94,11 @@ export class AvatarView {
   }
 
   private applyPose(force: boolean): void {
-    if (this.moving) {
+    if (this.posture === 'walk') {
       this.sprite.anims.play(walkAnimKey(this.textureKey, this.dir), !force)
     } else {
       this.sprite.anims.stop()
-      this.sprite.setFrame(idleFrame(this.dir))
+      this.sprite.setFrame(this.posture === 'sit' ? sitFrame(this.dir) : idleFrame(this.dir))
     }
   }
 }

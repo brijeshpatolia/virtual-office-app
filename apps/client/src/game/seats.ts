@@ -1,5 +1,9 @@
 import { SIT_RADIUS, type Point, type SeatDef, type SitRejectReason } from '@vo/shared'
 
+// The hint (and the E key) work within this distance of a seat. The server allows SIT_RADIUS (48 px), so a request
+// sent while the avatar walks on a little still passes.
+export const SEAT_HINT_RADIUS = 40
+
 // The closest free seat whose point is within `radius` of the feet point.
 export function nearestFreeSeat(
   seats: readonly SeatDef[],

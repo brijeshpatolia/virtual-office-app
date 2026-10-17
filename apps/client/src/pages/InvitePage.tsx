@@ -5,8 +5,8 @@ import { errorMessage, isApiError } from '../api/http.ts'
 import { useResource } from '../hooks/useResource.ts'
 import { navigate } from '../router/navigation.tsx'
 import { loginPath } from '../router/routes.ts'
-import { buttonStyle, disabled, errorStyle, textStyle, titleStyle } from '../ui/pageStyles.ts'
-import { ErrorMessage, Message, Page, useMe } from './common.tsx'
+import { buttonStyle, disabled, textStyle, titleStyle } from '../ui/pageStyles.ts'
+import { ErrorMessage, FormError, Message, Page, useMe } from './common.tsx'
 
 // /invite/:token: anyone may see where the link leads; joining needs a sign-in (and comes back here).
 export function InvitePage({ token }: { token: string }) {
@@ -48,7 +48,7 @@ function JoinCard({ info, token, signedIn }: { info: InviteLinkInfoResponse; tok
         You are invited to the office <strong>{info.officeName}</strong>
         {info.role === 'guest' ? ' as a guest (lobby and meeting room only).' : '.'}
       </p>
-      {error && <p style={errorStyle}>{error}</p>}
+      <FormError id="invite-error" error={error} />
       <button type="button" style={disabled(buttonStyle, busy)} disabled={busy} onClick={join} data-testid="invite-join">
         {signedIn ? `Join ${info.companyName}` : 'Sign in to join'}
       </button>

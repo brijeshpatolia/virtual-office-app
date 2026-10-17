@@ -8,8 +8,18 @@ export interface OfficeSnapshot {
   sessionId: string
   rejects: number
   lastReject: { x: number; y: number; seq: number; reason: string } | null
-  local: { x: number; y: number; dir: string; seatId: string; zoneId: string; status: string; walking: boolean } | null
-  players: Array<{ sessionId: string; userId: string; name: string; x: number; y: number; seatId: string; zoneId: string }>
+  local: { x: number; y: number; dir: string; seatId: string; zoneId: string; status: string; walking: boolean; pose: string } | null
+  players: Array<{
+    sessionId: string
+    userId: string
+    name: string
+    x: number
+    y: number
+    seatId: string
+    zoneId: string
+    // How the page draws the other avatars (null for the own one).
+    rendered: { x: number; y: number; dir: string; pose: string } | null
+  }>
   seats: Record<string, string>
 }
 

@@ -1,11 +1,11 @@
 import { useState, type CSSProperties } from 'react'
-import type { InviteRole } from '@vo/shared'
+import type { InviteLinkSummary, InviteRole } from '@vo/shared'
 import { errorMessage } from '../api/http.ts'
 import { useMediaQuery } from '../hooks/useMediaQuery.ts'
+import { headerButtonStyle, headerFont } from './headerStyles.ts'
+import { InviteLinksPanel } from './InviteLinksPanel.tsx'
 
 export const HEADER_HEIGHT = 48
-
-const font = 'system-ui, -apple-system, "Segoe UI", sans-serif'
 
 const headerStyle: CSSProperties = {
   height: HEADER_HEIGHT,
@@ -16,36 +16,33 @@ const headerStyle: CSSProperties = {
   padding: '0 12px',
   background: '#141820',
   color: '#ffffff',
-  fontFamily: font,
+  fontFamily: headerFont,
   fontSize: 14,
   whiteSpace: 'nowrap',
 }
 
 const titleStyle: CSSProperties = { flex: '1 1 auto', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }
 
-const buttonStyle: CSSProperties = {
-  padding: '6px 10px',
-  border: '1px solid rgba(255, 255, 255, 0.25)',
-  borderRadius: 6,
-  background: 'transparent',
-  color: '#ffffff',
-  fontFamily: font,
-  fontSize: 13,
-  cursor: 'pointer',
-}
+const selectStyle: CSSProperties = { ...headerButtonStyle, padding: '5px 6px', background: '#141820' }
 
-const selectStyle: CSSProperties = { ...buttonStyle, padding: '5px 6px', background: '#141820' }
+// Owners and admins only.
+export interface InviteActions {
+  // A new invite link; resolves its URL.
+  create(role: InviteRole): Promise<string>
+  // The links that still let someone join.
+  list(): Promise<InviteLinkSummary[]>
+  revoke(linkId: string): Promise<void>
+}
 
 export interface OfficeHeaderProps {
   companyName: string
   officeName: string
   userName: string
-  // Owners and admins only; returns the invite URL.
-  createInvite: ((role: InviteRole) => Promise<string>) | null
+  invites: InviteActions | null
   onSignOut: () => void
 }
 
-export function OfficeHeader({ companyName, officeName, userName, createInvite, onSignOut }: OfficeHeaderProps) {
+export function OfficeHeader({ companyName, officeName, userName, invites, onSignOut }: OfficeHeaderProps) {
   const narrow = useMediaQuery('(max-width: 640px)')
   return (
     <header style={narrow ? { ...headerStyle, gap: 8, padding: '0 8px' } : headerStyle} data-testid="office-header">
@@ -54,13 +51,14 @@ export function OfficeHeader({ companyName, officeName, userName, createInvite, 
         <span style={{ opacity: 0.7 }}> · </span>
         <span data-testid="office-name">{officeName}</span>
       </div>
-      {createInvite && <InviteControl createInvite={createInvite} narrow={narrow} />}
+      {invites && <InviteControl createInvite={invites.create} narrow={narrow} />}
+      {invites && <InviteLinksPanel invites={invites} />}
       {!narrow && (
         <span data-testid="user-name" style={{ opacity: 0.85 }}>
           {userName}
         </span>
       )}
-      <button type="button" style={buttonStyle} onClick={onSignOut} data-testid="sign-out">
+      <button type="button" style={headerButtonStyle} onClick={onSignOut} data-testid="sign-out">
         Sign out
       </button>
     </header>
@@ -75,6 +73,8 @@ function copyText(text: string): Promise<void> {
   ])
 }
 
+const ROLE_LABEL: Record<InviteRole, string> = { member: 'Member', guest: 'Guest' }
+
 function InviteControl({ createInvite, narrow }: { createInvite: (role: InviteRole) => Promise<string>; narrow: boolean }) {
   const [role, setRole] = useState<InviteRole>('member')
   const [status, setStatus] = useState<{ text: string; url?: string } | null>(null)
@@ -87,7 +87,7 @@ function InviteControl({ createInvite, narrow }: { createInvite: (role: InviteRo
       .then(async (url) => {
         try {
           await copyText(url)
-          setStatus({ text: 'Invite link copied' })
+          setStatus({ text: `${ROLE_LABEL[role]} invite link copied` })
         } catch {
           // No clipboard permission (or not a secure context): show the link to copy by hand.
           setStatus({ text: 'Copy this link:', url })
@@ -100,7 +100,7 @@ function InviteControl({ createInvite, narrow }: { createInvite: (role: InviteRo
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
       {status && (!narrow || status.url) && (
-        <span data-testid="invite-status" style={{ fontSize: 12, opacity: 0.85 }}>
+        <span data-testid="invite-status" role="status" style={{ fontSize: 12, opacity: 0.85 }}>
           {status.text}
           {status.url && (
             <input
@@ -117,12 +117,18 @@ function InviteControl({ createInvite, narrow }: { createInvite: (role: InviteRo
         aria-label="Invite as"
         style={selectStyle}
         value={role}
-        onChange={(e) => setRole(e.target.value === 'guest' ? 'guest' : 'member')}
+        onChange={(e) => {
+          setRole(e.target.value === 'guest' ? 'guest' : 'member')
+          setStatus(null)
+          // Back to the map, so the arrow keys walk again instead of changing the role.
+          e.target.blur()
+        }}
+        data-testid="invite-role"
       >
         <option value="member">Member</option>
         <option value="guest">Guest</option>
       </select>
-      <button type="button" style={buttonStyle} onClick={copy} disabled={busy} data-testid="copy-invite">
+      <button type="button" style={headerButtonStyle} onClick={copy} disabled={busy} data-testid="copy-invite">
         {narrow ? (status && !status.url ? 'Copied' : 'Invite') : 'Copy invite link'}
       </button>
     </div>

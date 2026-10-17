@@ -90,7 +90,7 @@ describe('invite links', () => {
   it('refuses a revoked link', async () => {
     const link = await createInviteLink(owner, company.officeId, { role: 'guest' })
     const stored = await findInviteLinkByTokenHash(api.database.db, hashToken(link.token))
-    expect(await forOrg(api.database.db, company.orgId).revokeInviteLink(stored?.link.id ?? '')).toBe(true)
+    expect(await forOrg(api.database.db, company.orgId).revokeInviteLink(company.officeId, stored?.link.id ?? '')).toBe(true)
     expect((await info(link.token)).body).toMatchObject({ valid: false })
     expect(await accept(await someone(), link.token)).toMatchObject({ status: 410 })
   })

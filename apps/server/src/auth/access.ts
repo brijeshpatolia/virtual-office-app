@@ -20,9 +20,14 @@ export function can(role: OrgRole, action: OfficeAction): boolean {
   return roles[role].authorize({ office: [action] }).success
 }
 
-// Better Auth stores member.role as text that may list several roles ('admin,member'). The strongest known role
-// counts; null when none is known (the user then gets no access).
+// Better Auth stores member.role as text that may list several roles ('admin,member'). It splits it on ',' without
+// trimming, and so does this: the strongest known role counts, null when none is known (the user then gets no
+// access). The organization hooks in auth.ts store only single, exact roles.
 export function toOrgRole(stored: string): OrgRole | null {
-  const listed = new Set(stored.split(',').map((role) => role.trim()))
+  const listed = new Set(stored.split(','))
   return ORG_ROLES.find((role) => listed.has(role)) ?? null
+}
+
+export function isOrgRole(value: unknown): value is OrgRole {
+  return typeof value === 'string' && (ORG_ROLES as readonly string[]).includes(value)
 }

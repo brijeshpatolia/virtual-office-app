@@ -1,12 +1,16 @@
-import { useCallback } from 'react'
-import type { InviteRole, MeResponse, OfficeResponse } from '@vo/shared'
-import { createInviteLink, fetchOffice } from '../api/endpoints.ts'
+import { useMemo } from 'react'
+import type { MeResponse, OfficeResponse } from '@vo/shared'
+import { createInviteLink, fetchOffice, listInviteLinks, revokeInviteLink } from '../api/endpoints.ts'
 import { isApiError } from '../api/http.ts'
 import { useResource } from '../hooks/useResource.ts'
 import { joinColyseusOffice } from '../net/colyseusLink.ts'
 import { ErrorMessage, Message, SignedIn, signOut } from '../pages/common.tsx'
 import { useAccessToken, useOfficeConnection } from './hooks.ts'
+import type { InviteActions } from './OfficeHeader.tsx'
 import { OfficeView } from './OfficeView.tsx'
+
+// Links made in the header: 3 days and 10 people at most (the API allows up to 30 days and 1000 uses).
+export const HEADER_INVITE_LINK = { expiresInHours: 72, maxUses: 10 } as const
 
 // /office/:officeId for members of the office's company.
 export function OfficePage({ officeId }: { officeId: string }) {
@@ -29,9 +33,18 @@ function ConnectedOffice({ details, me }: { details: OfficeResponse; me: MeRespo
   const { office, role } = details
   const getToken = useAccessToken(office.id)
   const [connection, reconnect] = useOfficeConnection(office.id, getToken, joinColyseusOffice)
-  const createInvite = useCallback(
-    (inviteRole: InviteRole) => createInviteLink(office.id, { role: inviteRole }).then((invite) => invite.url),
-    [office.id],
+  const invites = useMemo<InviteActions | null>(
+    () =>
+      role === 'owner' || role === 'admin'
+        ? {
+            create: async (inviteRole) => (await createInviteLink(office.id, { role: inviteRole, ...HEADER_INVITE_LINK })).url,
+            list: async () => (await listInviteLinks(office.id)).links,
+            revoke: async (linkId) => {
+              await revokeInviteLink(office.id, linkId)
+            },
+          }
+        : null,
+    [office.id, role],
   )
   const company = me.orgs.find((org) => org.id === office.orgId)
 
@@ -44,7 +57,7 @@ function ConnectedOffice({ details, me }: { details: OfficeResponse; me: MeRespo
       companyName={company?.name ?? ''}
       officeName={office.name}
       userName={me.user.name}
-      createInvite={role === 'owner' || role === 'admin' ? createInvite : null}
+      invites={invites}
       onSignOut={leaveAndSignOut}
       connection={connection}
       onReconnect={reconnect}

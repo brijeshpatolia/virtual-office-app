@@ -4,7 +4,8 @@ import { leaveReason, type JoinOffice, type OfficeConnectionHandle, type OfficeL
 // ErrorCode.AUTH_FAILED of @colyseus/sdk: onAuth threw ServerError(AUTH_FAILED).
 export const MATCHMAKE_AUTH_FAILED = 525
 
-export type ClosedReason = 'replaced' | 'removed' | 'lost' | 'denied' | 'error'
+// signed_out: the session is gone (the token route answered 401); the page sends the user to the sign-in page.
+export type ClosedReason = 'replaced' | 'removed' | 'role_changed' | 'lost' | 'denied' | 'signed_out' | 'error'
 
 export type ConnectionState =
   | { kind: 'idle' }
@@ -14,8 +15,13 @@ export type ConnectionState =
 
 // Matchmaking failed in onAuth (MatchMakeError 525), or the token route said no: the user may not enter.
 export function isAccessDenied(error: unknown): boolean {
-  if (error instanceof ApiRequestError) return ['unauthorized', 'forbidden', 'not_found'].includes(error.code)
+  if (error instanceof ApiRequestError) return ['forbidden', 'not_found'].includes(error.code)
   return error instanceof Error && error.name === 'MatchMakeError' && 'code' in error && error.code === MATCHMAKE_AUTH_FAILED
+}
+
+function closedReasonFor(error: unknown): ClosedReason {
+  if (error instanceof ApiRequestError && error.code === 'unauthorized') return 'signed_out'
+  return isAccessDenied(error) ? 'denied' : 'error'
 }
 
 // One office room connection with its lifecycle, outside React (useOfficeConnection subscribes to it).
@@ -64,7 +70,7 @@ export class OfficeConnection {
       handle = await this.join(this.officeId, await this.getToken())
     } catch (error) {
       if (attempt !== this.attempt) return
-      this.set({ kind: 'closed', reason: isAccessDenied(error) ? 'denied' : 'error', detail: errorMessage(error) })
+      this.set({ kind: 'closed', reason: closedReasonFor(error), detail: errorMessage(error) })
       return
     }
     if (attempt !== this.attempt) {

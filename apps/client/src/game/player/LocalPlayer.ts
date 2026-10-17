@@ -14,7 +14,8 @@ import type { OfficeLink } from '../../net/officeLink.ts'
 import { AVATAR_FRAME } from '../avatar/avatarArt.ts'
 import { AvatarView } from '../avatar/AvatarView.ts'
 import { EventBus } from '../EventBus.ts'
-import { nearestFreeSeat, seatHint, sitRejectText } from '../seats.ts'
+import { nearestFreeSeat, SEAT_HINT_RADIUS, seatHint, sitRejectText } from '../seats.ts'
+import { EntryBlock, isEntryReject } from './entryBlock.ts'
 import { facingFor, inputVelocity, NO_INPUT, type DirectionInput } from './input.ts'
 import { MoveSender, type MoveSample } from './moveSender.ts'
 
@@ -43,10 +44,14 @@ export class LocalPlayer {
   private readonly body: Phaser.Physics.Arcade.Body
   private readonly collider: Phaser.Physics.Arcade.Collider
   private readonly sender: MoveSender
+  private readonly entry = new EntryBlock()
   private dir: Facing
   private seatId: string
   // A seat request is on its way; input waits for the answer.
   private busy = false
+  // The connection is down (the SDK reconnects): no input, no moves.
+  private paused = false
+  private held: DirectionInput = NO_INPUT
   private hint: string | null = null
   // Set by the E key's down event and read once per frame. JustDown() would miss a tap whose key up arrives in
   // the same frame (Phaser clears the flag on key up).
@@ -78,6 +83,7 @@ export class LocalPlayer {
     // Recompute the body position from the sprite with the new size and offset.
     this.body.reset(state.x, state.y)
     this.body.enable = this.seatId === ''
+    this.view.setPose(this.dir, false, this.seated)
     this.collider = scene.physics.add.collider(sprite, deps.obstacles)
     this.sender = new MoveSender(this.sample(false))
     deps.keys.interact.on(Phaser.Input.Keyboard.Events.DOWN, this.onInteractKey)
@@ -103,24 +109,24 @@ export class LocalPlayer {
     this.updatedAt = now
     if (this.interactPressed) {
       this.interactPressed = false
-      this.interact()
+      if (!this.paused) this.interact(now)
     }
-    if (import.meta.env.DEV && this.autopilot && !this.busy && !this.seated) {
+    if (import.meta.env.DEV && this.autopilot && !this.busy && !this.seated && !this.paused) {
       this.steer(this.autopilot, now, dt)
       this.updateHint()
       return
     }
-    const input: DirectionInput =
-      this.busy || this.seated
+    this.held =
+      this.busy || this.seated || this.paused
         ? NO_INPUT
         : { up: anyDown(keys.up), down: anyDown(keys.down), left: anyDown(keys.left), right: anyDown(keys.right) }
-    const velocity = inputVelocity(input)
+    const velocity = inputVelocity(this.entry.filter(this.held))
     const moving = velocity.vx !== 0 || velocity.vy !== 0
     if (this.body.enable) this.body.setVelocity(velocity.vx, velocity.vy)
     this.dir = facingFor(velocity, this.dir)
-    this.view.setPose(this.dir, moving)
+    this.view.setPose(this.dir, moving, this.seated)
     this.view.sync()
-    if (!this.seated && !this.busy) this.send(now, moving, false)
+    if (!this.seated && !this.busy && !this.paused) this.send(now, moving, false)
     this.updateHint()
   }
 
@@ -128,21 +134,36 @@ export class LocalPlayer {
   // usual moves. It skips the local collision check, so the server decides: a move into a wall comes back as
   // move:reject, which snaps the avatar back and ends the walk.
   walkTo(x: number, y: number): void {
-    if (!this.seated && !this.busy) this.autopilot = { x, y }
+    if (!this.seated && !this.busy && !this.paused) this.autopilot = { x, y }
   }
 
   // The tab is hidden or the window lost focus: stop and tell the server at once.
   halt(now: number): void {
     this.autopilot = null
     if (this.body.enable) this.body.setVelocity(0, 0)
-    if (!this.seated && !this.busy) this.send(now, false, true)
+    if (!this.seated && !this.busy && !this.paused) this.send(now, false, true)
+  }
+
+  // The connection dropped: stand still and send nothing (the SDK would queue the moves and replay them later).
+  pause(): void {
+    this.paused = true
+    this.autopilot = null
+    if (this.body.enable) this.body.setVelocity(0, 0)
+    this.view.setPose(this.dir, false, this.seated)
+  }
+
+  // Reconnected: go on from where the server has the player.
+  resume(state: PlayerState): void {
+    this.paused = false
+    if (state.seatId !== '') this.sitAt(state.seatId, state.x, state.y, state.dir)
+    else this.standUp(state.x, state.y)
   }
 
   // Server truth for the own player: look, and seats changed by the server (e.g. after a reconnect).
   applyServerState(state: PlayerState): void {
     this.view.setLook(state)
     if (this.busy || state.seatId === this.seatId) return
-    if (state.seatId === '') this.standUp()
+    if (state.seatId === '') this.standUp(state.x, state.y)
     else this.sitAt(state.seatId, state.x, state.y, state.dir)
   }
 
@@ -151,6 +172,10 @@ export class LocalPlayer {
     this.autopilot = null
     this.placeAt(reject.x, reject.y)
     this.sender.reset(this.sample(false))
+    if (isEntryReject(reject.reason)) {
+      const toast = this.entry.block(this.held, reject.reason, performance.now())
+      if (toast) EventBus.emit('toast', toast)
+    }
   }
 
   destroy(): void {
@@ -195,13 +220,13 @@ export class LocalPlayer {
     this.placed = { x, y }
   }
 
-  private interact(): void {
+  private interact(now: number): void {
     if (this.busy) return
     const { link } = this.deps
-    this.busy = true
     if (this.seated) {
+      this.busy = true
       link.stand().then(
-        () => this.standUp(),
+        (response) => this.standUp(response.x, response.y),
         () => EventBus.emit('toast', 'Could not stand up. Try again.'),
       ).finally(() => {
         this.busy = false
@@ -209,11 +234,13 @@ export class LocalPlayer {
       return
     }
     const seat = this.nearbySeat()
-    if (!seat) {
-      this.busy = false
-      return
-    }
+    if (!seat) return
+    // Stop here first: the server measures the distance to the seat from the last move it accepted, and the
+    // socket keeps the order, so this stop arrives before the request.
+    this.autopilot = null
     this.body.setVelocity(0, 0)
+    this.send(now, false, true)
+    this.busy = true
     link.sit(seat.id).then(
       (response) => this.sitAt(response.seatId, response.x, response.y, response.dir),
       (error: unknown) => EventBus.emit('toast', sitRejectText(rejectReason(error))),
@@ -230,26 +257,28 @@ export class LocalPlayer {
     this.body.setVelocity(0, 0)
     this.placeAt(x, y)
     this.body.enable = false
-    this.view.setPose(dir, false)
+    this.view.setPose(dir, false, true)
     this.sender.reset(this.sample(false))
   }
 
-  private standUp(): void {
+  // Where the server put the player when it stood up (beside the seat when the seat is not free floor).
+  private standUp(x: number, y: number): void {
     if (this.destroyed) return
     this.seatId = ''
     this.body.enable = true
-    this.placeAt(this.sprite.x, this.sprite.y)
+    this.placeAt(x, y)
+    this.view.setPose(this.dir, false, false)
     this.sender.reset(this.sample(false))
   }
 
   private nearbySeat(): SeatDef | null {
     const { seats, link } = this.deps
     const feet = { x: this.body.center.x, y: this.body.center.y }
-    return nearestFreeSeat(seats, feet, (seatId) => (link.state.seats.get(seatId)?.occupantId ?? '') === '')
+    return nearestFreeSeat(seats, feet, (seatId) => (link.state.seats.get(seatId)?.occupantId ?? '') === '', SEAT_HINT_RADIUS)
   }
 
   private updateHint(): void {
-    const hint = this.busy ? this.hint : seatHint(this.seated, this.seated ? null : this.nearbySeat())
+    const hint = this.busy ? this.hint : seatHint(this.seated, this.seated || this.paused ? null : this.nearbySeat())
     if (hint === this.hint) return
     this.hint = hint
     EventBus.emit('seat-hint', hint)

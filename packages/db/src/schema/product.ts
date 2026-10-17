@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm'
-import { check, foreignKey, index, integer, jsonb, pgTable, text, timestamp, unique, uniqueIndex } from 'drizzle-orm/pg-core'
+import { check, foreignKey, index, integer, jsonb, pgTable, primaryKey, text, timestamp, unique, uniqueIndex } from 'drizzle-orm/pg-core'
 import { newId } from '../id.ts'
 import { organization, user } from './auth.ts'
 
@@ -55,6 +55,21 @@ export const inviteLinks = pgTable(
     check('invite_links_role_check', sql`${t.role} in ('member', 'guest')`),
     check('invite_links_uses_check', sql`${t.uses} >= 0 and (${t.maxUses} is null or ${t.maxUses} >= 1)`),
   ],
+)
+
+// People an owner or admin removed from the company. An invite link does not let them back in; an email invitation
+// they accept does (and deletes the row).
+export const memberRemovals = pgTable(
+  'member_removals',
+  {
+    orgId: orgId(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => user.id, { onDelete: 'cascade' }),
+    removedBy: text('removed_by').references(() => user.id, { onDelete: 'set null' }),
+    removedAt: at('removed_at').notNull().defaultNow(),
+  },
+  (t) => [primaryKey({ name: 'member_removals_pkey', columns: [t.orgId, t.userId] })],
 )
 
 export const presenceSessions = pgTable(

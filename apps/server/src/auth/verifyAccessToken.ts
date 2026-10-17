@@ -1,4 +1,4 @@
-import { OrgRoleSchema, type OrgRole } from '@vo/shared'
+import { NAME_MAX_LENGTH, OrgRoleSchema, type OrgRole } from '@vo/shared'
 import { createLocalJWKSet, errors, jwtVerify, type JWTPayload, type JWTVerifyGetKey } from 'jose'
 import { z } from 'zod'
 import type { Env } from '../env.ts'
@@ -26,7 +26,7 @@ const ClaimsSchema = z.object({
   orgId: z.string().min(1),
   officeId: z.string().min(1),
   role: OrgRoleSchema,
-  name: z.string().min(1),
+  name: z.string().min(1).max(NAME_MAX_LENGTH),
 })
 
 // Checks tokens against the public keys in the database (through the auth instance, no network hop).

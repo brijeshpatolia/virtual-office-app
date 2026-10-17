@@ -11,13 +11,23 @@ export type RequestErrorCode = ApiErrorCode | 'network' | 'bad_response'
 export class ApiRequestError extends Error {
   readonly status: number
   readonly code: RequestErrorCode
+  // The server's short reason ('removed', 'company_limit', ...); message is the text for the UI.
+  readonly reason: string | undefined
 
-  constructor(status: number, code: RequestErrorCode, message: string) {
+  constructor(status: number, code: RequestErrorCode, message: string, reason?: string) {
     super(message)
     this.name = 'ApiRequestError'
     this.status = status
     this.code = code
+    this.reason = reason
   }
+}
+
+const REASON_TEXT: Record<string, string> = {
+  origin: 'This request did not come from the office page.',
+  membership_limit: 'This company is full.',
+  company_limit: 'You already own as many companies as one person can.',
+  removed: 'An owner or admin removed you from this company. Ask them for an email invitation.',
 }
 
 export function isApiError(error: unknown, code: RequestErrorCode): boolean {
@@ -34,7 +44,7 @@ export function errorMessage(error: unknown): string {
 }
 
 interface RequestOptions {
-  method?: 'GET' | 'POST'
+  method?: 'GET' | 'POST' | 'DELETE'
   body?: unknown
 }
 
@@ -57,7 +67,9 @@ export async function apiRequest<T>(path: string, schema: Parser<T>, options: Re
   if (!response.ok) {
     const parsed = ApiErrorSchema.safeParse(json)
     if (parsed.success) {
-      throw new ApiRequestError(response.status, parsed.data.error, parsed.data.message ?? defaultMessage(parsed.data.error))
+      const { error, message } = parsed.data
+      const text = message === undefined ? defaultMessage(error) : (REASON_TEXT[message] ?? message)
+      throw new ApiRequestError(response.status, error, text, message)
     }
     // The Vite proxy answers 502/504 when the office server is down.
     if (response.status === 502 || response.status === 504) throw new ApiRequestError(response.status, 'network', 'Bad gateway')
@@ -82,6 +94,10 @@ function defaultMessage(code: ApiErrorCode): string {
       return 'Not found.'
     case 'invite_invalid':
       return 'This invite is no longer valid.'
+    case 'length_required':
+    case 'payload_too_large':
+    case 'unsupported_media_type':
+      return 'The request was too large or not JSON.'
     case 'rate_limited':
       return 'Too many requests. Try again in a minute.'
     case 'internal':

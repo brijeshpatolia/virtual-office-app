@@ -33,7 +33,7 @@ export interface OfficeConnectionHandle {
 
 export type JoinOffice = (officeId: string, token: string) => Promise<OfficeConnectionHandle>
 
-export type LeaveReason = 'left' | 'replaced' | 'removed' | 'lost'
+export type LeaveReason = 'left' | 'replaced' | 'removed' | 'role_changed' | 'lost'
 
 // Colyseus: 4000 = we left (consented). ROOM_CLOSE codes come from our server. Anything else: the connection
 // is lost (server shutdown 4001, failed reconnection 4003, too short uptime for a reconnect, errors).
@@ -41,5 +41,6 @@ export function leaveReason(code: number): LeaveReason {
   if (code === 4000) return 'left'
   if (code === ROOM_CLOSE.replaced) return 'replaced'
   if (code === ROOM_CLOSE.removed) return 'removed'
+  if (code === ROOM_CLOSE.roleChanged) return 'role_changed'
   return 'lost'
 }

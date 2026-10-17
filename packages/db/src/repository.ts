@@ -1,6 +1,6 @@
-import { and, asc, eq, getTableColumns, gt, isNull, lt, or, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, getTableColumns, gt, isNull, lt, or, sql } from 'drizzle-orm'
 import type { Db } from './index.ts'
-import { auditLog, inviteLinks, member, offices, organization, presenceSessions } from './schema/index.ts'
+import { auditLog, inviteLinks, member, memberRemovals, offices, organization, presenceSessions, user } from './schema/index.ts'
 
 export type OfficeRow = typeof offices.$inferSelect
 export type InviteLinkRow = typeof inviteLinks.$inferSelect
@@ -20,6 +20,10 @@ export interface NewInviteLink {
   maxUses: number | null
   expiresAt: Date
   createdBy: string
+}
+
+export interface ActiveInviteLink extends InviteLinkRow {
+  creatorName: string
 }
 
 export interface AuditEntry {
@@ -76,12 +80,7 @@ export function forOrg(db: Db, orgId: string) {
         .update(inviteLinks)
         .set({ uses: sql`${inviteLinks.uses} + 1` })
         .where(
-          and(
-            link(linkId),
-            isNull(inviteLinks.revokedAt),
-            gt(inviteLinks.expiresAt, now),
-            or(isNull(inviteLinks.maxUses), lt(inviteLinks.uses, inviteLinks.maxUses)),
-          ),
+          and(link(linkId), usable(now)),
         )
         .returning({ id: inviteLinks.id })
       return rows.length > 0
@@ -95,13 +94,53 @@ export function forOrg(db: Db, orgId: string) {
         .where(link(linkId))
     },
 
-    async revokeInviteLink(linkId: string, now = new Date()): Promise<boolean> {
+    // The links of an office that still let someone join (not revoked, expired or used up), newest first.
+    async listActiveInviteLinks(officeId: string, now = new Date()): Promise<ActiveInviteLink[]> {
+      return db
+        .select({ ...getTableColumns(inviteLinks), creatorName: user.name })
+        .from(inviteLinks)
+        .innerJoin(user, eq(user.id, inviteLinks.createdBy))
+        .where(and(eq(inviteLinks.orgId, orgId), eq(inviteLinks.officeId, officeId), usable(now)))
+        .orderBy(desc(inviteLinks.createdAt))
+    },
+
+    async revokeInviteLink(officeId: string, linkId: string, now = new Date()): Promise<boolean> {
       const rows = await db
         .update(inviteLinks)
         .set({ revokedAt: now })
-        .where(and(link(linkId), isNull(inviteLinks.revokedAt)))
+        .where(and(link(linkId), eq(inviteLinks.officeId, officeId), isNull(inviteLinks.revokedAt)))
         .returning({ id: inviteLinks.id })
       return rows.length > 0
+    },
+
+    // Revokes every open link that `userId` created (they were removed or left). Resolves how many.
+    async revokeInviteLinksCreatedBy(userId: string, now = new Date()): Promise<number> {
+      const rows = await db
+        .update(inviteLinks)
+        .set({ revokedAt: now })
+        .where(and(eq(inviteLinks.orgId, orgId), eq(inviteLinks.createdBy, userId), isNull(inviteLinks.revokedAt)))
+        .returning({ id: inviteLinks.id })
+      return rows.length
+    },
+
+    async recordRemoval(userId: string, removedBy: string | null, now = new Date()): Promise<void> {
+      await db
+        .insert(memberRemovals)
+        .values({ orgId, userId, removedBy, removedAt: now })
+        .onConflictDoUpdate({ target: [memberRemovals.orgId, memberRemovals.userId], set: { removedBy, removedAt: now } })
+    },
+
+    async wasRemoved(userId: string): Promise<boolean> {
+      const rows = await db
+        .select({ userId: memberRemovals.userId })
+        .from(memberRemovals)
+        .where(and(eq(memberRemovals.orgId, orgId), eq(memberRemovals.userId, userId)))
+        .limit(1)
+      return rows.length > 0
+    },
+
+    async clearRemoval(userId: string): Promise<void> {
+      await db.delete(memberRemovals).where(and(eq(memberRemovals.orgId, orgId), eq(memberRemovals.userId, userId)))
     },
 
     async startPresence(officeId: string, userId: string): Promise<string> {
@@ -190,6 +229,14 @@ export async function findInviteLinkByTokenHash(db: Db, tokenHash: string): Prom
     .where(eq(inviteLinks.tokenHash, tokenHash))
     .limit(1)
   return rows[0] ?? null
+}
+
+function usable(now: Date) {
+  return and(
+    isNull(inviteLinks.revokedAt),
+    gt(inviteLinks.expiresAt, now),
+    or(isNull(inviteLinks.maxUses), lt(inviteLinks.uses, inviteLinks.maxUses)),
+  )
 }
 
 export function isInviteLinkUsable(link: Pick<InviteLinkRow, 'revokedAt' | 'expiresAt' | 'maxUses' | 'uses'>, now = new Date()): boolean {

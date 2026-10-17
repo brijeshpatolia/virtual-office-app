@@ -24,8 +24,18 @@ export function useOfficeConnection(
   useEffect(() => {
     // StrictMode runs this effect twice in a row in dev; the timer lets only the second run join.
     const timer = window.setTimeout(() => connection.connect(), 0)
+    // Closing the tab or leaving the page: leave the room with consent, so the others see the avatar (and its seat)
+    // go at once instead of after the 30 s reconnection wait. A page restored from the back-forward cache joins again.
+    const onPageHide = (): void => connection.disconnect()
+    const onPageShow = (event: PageTransitionEvent): void => {
+      if (event.persisted) connection.connect()
+    }
+    window.addEventListener('pagehide', onPageHide)
+    window.addEventListener('pageshow', onPageShow)
     return () => {
       window.clearTimeout(timer)
+      window.removeEventListener('pagehide', onPageHide)
+      window.removeEventListener('pageshow', onPageShow)
       connection.disconnect()
     }
   }, [connection])

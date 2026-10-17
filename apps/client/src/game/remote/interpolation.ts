@@ -1,4 +1,4 @@
-import type { Facing } from '@vo/shared'
+import { PATCH_RATE_MS, type Facing } from '@vo/shared'
 
 export interface Snapshot {
   // Local receive time in ms (performance.now()).
@@ -7,6 +7,7 @@ export interface Snapshot {
   y: number
   dir: Facing
   moving: boolean
+  seated: boolean
 }
 
 export interface Pose {
@@ -14,10 +15,13 @@ export interface Pose {
   y: number
   dir: Facing
   moving: boolean
+  seated: boolean
 }
 
-// Remote avatars are drawn this far in the past, so there is usually a newer position to move towards.
-export const INTERPOLATION_DELAY_MS = 100
+// Remote avatars are drawn this far in the past, so there is usually a newer position to move towards. Two patch
+// intervals: a walker's moves (every 100-117 ms) leave some 100 ms patches empty, and a one-patch delay then runs
+// past the newest snapshot (the avatar stalls, then jumps).
+export const INTERPOLATION_DELAY_MS = 2 * PATCH_RATE_MS
 // A jump this long (sit, snap back, reconnect) is shown at once instead of being walked.
 export const TELEPORT_PX = 96
 const KEEP = 32
@@ -58,8 +62,9 @@ export class InterpolationBuffer {
     const b = this.snapshots[1]
     if (!b || renderTime <= a.t) return pose(a)
     const k = Math.min(1, (renderTime - a.t) / (b.t - a.t || 1))
-    return { x: a.x + (b.x - a.x) * k, y: a.y + (b.y - a.y) * k, dir: b.dir, moving: a.moving || b.moving }
+    // Seated only once the seat is reached; standing up shows at once.
+    return { x: a.x + (b.x - a.x) * k, y: a.y + (b.y - a.y) * k, dir: b.dir, moving: a.moving || b.moving, seated: a.seated && b.seated }
   }
 }
 
-const pose = ({ x, y, dir, moving }: Snapshot): Pose => ({ x, y, dir, moving })
+const pose = ({ x, y, dir, moving, seated }: Snapshot): Pose => ({ x, y, dir, moving, seated })

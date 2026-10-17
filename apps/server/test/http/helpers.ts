@@ -1,7 +1,5 @@
 import { createDb, type DbHandle } from '@vo/db'
-import { API } from '@vo/shared'
-import { toNodeHandler } from 'better-auth/node'
-import express, { type ErrorRequestHandler } from 'express'
+import express from 'express'
 import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
@@ -10,9 +8,8 @@ import { createAuth, type Auth } from '../../src/auth/auth.ts'
 import { createGetOfficeAccess, type GetOfficeAccess } from '../../src/auth/membership.ts'
 import { createVerifyAccessToken, type VerifyAccessToken } from '../../src/auth/verifyAccessToken.ts'
 import { loadEnv, type Env } from '../../src/env.ts'
-import { registerRoutes } from '../../src/http/routes.ts'
 import { createMailer } from '../../src/mail/mailer.ts'
-import { listeningPort } from '../../src/server.ts'
+import { configureApi, limitRequestBodies, listeningPort } from '../../src/server.ts'
 
 export const CLIENT_ORIGIN = 'http://localhost:8000'
 
@@ -35,7 +32,7 @@ export interface TestApi {
   close(): Promise<void>
 }
 
-// The HTTP side of startServer (Better Auth + /api routes, the same middleware order) on a random port, with an
+// The HTTP side of startServer (configureApi and the body limit) on a random port, with an
 // in-memory PGlite and the dev mailer writing to a temporary DATA_DIR. `vars` adds environment variables.
 export async function startTestApi(vars: Record<string, string> = {}): Promise<TestApi> {
   const dataDir = await mkdtemp(join(tmpdir(), 'vo-http-'))
@@ -47,15 +44,9 @@ export async function startTestApi(vars: Record<string, string> = {}): Promise<T
   const verifyAccessToken = createVerifyAccessToken({ env, auth })
 
   const app = express()
-  app.all(`${API.auth}/*splat`, toNodeHandler(auth))
-  app.use(express.json({ limit: '32kb' }))
-  registerRoutes(app, { env, db: database.db, auth, mailer, getOfficeAccess })
-  app.use('/api', (_req, res) => {
-    res.status(404).json({ error: 'not_found' })
-  })
-  app.use(jsonErrors)
-
+  configureApi(app, { env, db: database.db, auth, mailer, getOfficeAccess })
   const httpServer = createServer(app)
+  limitRequestBodies(httpServer)
   await new Promise<void>((resolve) => httpServer.listen(0, '127.0.0.1', resolve))
   const baseUrl = `http://127.0.0.1:${listeningPort(httpServer)}`
   let clients = 0
@@ -187,14 +178,4 @@ export async function createInviteLink(client: TestClient, officeId: string, bod
   const result = await client.post<{ url: string; token: string; expiresAt: string }>(`/api/offices/${officeId}/invite-links`, body)
   if (result.status !== 201) throw new Error(`create invite link: ${result.status} ${JSON.stringify(result.body)}`)
   return result.body
-}
-
-const jsonErrors: ErrorRequestHandler = (error: unknown, _req, res, next) => {
-  if (res.headersSent) {
-    next(error)
-    return
-  }
-  const parseFailed = typeof error === 'object' && error !== null && 'type' in error && error.type === 'entity.parse.failed'
-  if (!parseFailed) console.error(error)
-  res.status(parseFailed ? 400 : 500).json({ error: parseFailed ? 'invalid_request' : 'internal' })
 }

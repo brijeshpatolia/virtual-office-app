@@ -1,6 +1,6 @@
 import type Phaser from 'phaser'
 import type { PlayerState } from '@vo/shared'
-import { AvatarView } from '../avatar/AvatarView.ts'
+import { AvatarView, type AvatarPose } from '../avatar/AvatarView.ts'
 import { InterpolationBuffer } from './interpolation.ts'
 
 // Another player: drawn INTERPOLATION_DELAY_MS in the past between the positions the server sent.
@@ -19,9 +19,14 @@ export class RemoteAvatar {
     return this.view.sprite
   }
 
+  // What is drawn now (tests and window.__voOffice read it).
+  get rendered(): { x: number; y: number; dir: string; pose: AvatarPose } {
+    return { x: this.view.sprite.x, y: this.view.sprite.y, dir: this.view.facing, pose: this.view.pose }
+  }
+
   onServerChange(now: number): void {
-    const { x, y, dir, moving } = this.state
-    this.buffer.push({ t: now, x, y, dir, moving })
+    const { x, y, dir, moving, seatId } = this.state
+    this.buffer.push({ t: now, x, y, dir, moving, seated: seatId !== '' })
     this.view.setLook(this.state)
   }
 
@@ -29,7 +34,7 @@ export class RemoteAvatar {
     const pose = this.buffer.sample(now)
     if (!pose) return
     this.view.sprite.setPosition(pose.x, pose.y)
-    this.view.setPose(pose.dir, pose.moving)
+    this.view.setPose(pose.dir, pose.moving, pose.seated)
     this.view.sync()
   }
 

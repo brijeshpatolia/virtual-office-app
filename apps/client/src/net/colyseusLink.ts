@@ -21,10 +21,17 @@ type SyncedState = Synced<OfficeStateView>
 type SyncedPlayer = Synced<PlayerState>
 type OfficeRoom = Room<unknown, SyncedState>
 
+// The SDK also puts the token into the WebSocket URL (_authToken), where proxies log it. The room checks it only
+// in the matchmaking request (static onAuth), so the URL goes without it.
+export function withoutAuthToken(url: URL): string {
+  url.searchParams.delete('_authToken')
+  return url.toString()
+}
+
 // Joins the office room with the realtime token (sent as Authorization: Bearer during matchmaking; onAuth checks
 // it). Rejects with MatchMakeError (code 525 = not allowed) or a network error.
 export const joinColyseusOffice: JoinOffice = async (officeId, token) => {
-  const client = new Client(colyseusEndpoint())
+  const client = new Client(colyseusEndpoint(), { urlBuilder: withoutAuthToken })
   client.auth.token = token
   const options: JoinOptions = { officeId }
   const room = await client.joinOrCreate<SyncedState>(ROOM_NAME, options)
@@ -50,7 +57,10 @@ function wrapRoom(room: OfficeRoom): OfficeConnectionHandle {
         const parsed = MoveRejectSchema.safeParse(payload)
         if (parsed.success) handler(parsed.data)
       }),
-    sendMove: (move) => room.send(MSG.move, move),
+    // While the connection is down the SDK would queue moves and replay them after the reconnect; drop them instead.
+    sendMove: (move) => {
+      if (room.connection.isOpen) room.send(MSG.move, move)
+    },
     sendActivity: (activity) => room.send(MSG.activity, activity),
     sit: async (seatId) => SitResponseSchema.parse(await room.request(MSG.sit, { seatId })),
     stand: async () => StandResponseSchema.parse(await room.request(MSG.stand, {})),

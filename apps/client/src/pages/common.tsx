@@ -56,6 +56,20 @@ export function ErrorMessage({ error, onRetry }: { error: unknown; onRetry?: () 
   )
 }
 
+// A form error, read out by screen readers as it appears. Point the field at it with fieldErrorProps(id, error).
+export function FormError({ id, error }: { id: string; error: string | null }) {
+  if (!error) return null
+  return (
+    <p id={id} role="alert" style={errorStyle}>
+      {error}
+    </p>
+  )
+}
+
+export function fieldErrorProps(id: string, error: string | null) {
+  return error ? { 'aria-invalid': true, 'aria-describedby': id } : {}
+}
+
 export function Redirect({ to }: { to: string }) {
   useEffect(() => navigate(to, { replace: true }), [to])
   return null
@@ -104,9 +118,10 @@ function NameForm({ email, onDone }: { email: string; onDone: () => void }) {
             autoFocus
             required
             data-testid="name-input"
+            {...fieldErrorProps('name-error', error)}
           />
         </label>
-        {error && <p style={errorStyle}>{error}</p>}
+        <FormError id="name-error" error={error} />
         <button type="submit" style={disabled(buttonStyle, busy)} disabled={busy} data-testid="name-submit">
           Continue
         </button>

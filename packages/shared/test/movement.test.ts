@@ -82,12 +82,17 @@ describe('spendMoveBudget', () => {
       budget = spendMoveBudget(budget, 20, t)
       if (budget !== null) accepted++
     }
-    // A full 200 px budget, then 10 px of refill and 20 px of travel per move.
-    expect(accepted).toBe(19)
+    // A full 400 px budget, then 10 px of refill and 20 px of travel per move.
+    expect(accepted).toBe(39)
   })
 
-  it('absorbs a burst after a stall up to one second of travel', () => {
+  it('absorbs a burst after a stall up to two seconds of travel', () => {
     const budget = fullMoveBudget(0)
+    expect(MOVE_BUDGET_PX).toBe(400)
+    // A 2.5 s stall of an honest client: 25 moves of 16 px arrive at once.
+    let backlog: MoveBudget | null = budget
+    for (let i = 0; i < 25 && backlog !== null; i++) backlog = spendMoveBudget(backlog, 16, 0)
+    expect(backlog?.px).toBeCloseTo(0)
     expect(spendMoveBudget(budget, MOVE_BUDGET_PX, 0)?.px).toBe(0)
     expect(spendMoveBudget(budget, MOVE_BUDGET_PX + 1, 0)).toBeNull()
     expect(spendMoveBudget({ px: 0, atMs: 0 }, 100, 500)?.px).toBeCloseTo(0)

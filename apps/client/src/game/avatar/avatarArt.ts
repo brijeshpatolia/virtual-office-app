@@ -7,9 +7,10 @@ import type { Facing } from '@vo/shared'
 export const AVATAR_FRAME = { width: 32, height: 48 } as const
 // Sheet rows, top to bottom.
 export const AVATAR_ROWS: readonly Facing[] = ['down', 'left', 'right', 'up']
-// Columns: 0 idle, 1-3 walk.
-export const AVATAR_COLUMNS = 4
+// Columns: 0 idle, 1-3 walk, 4 seated.
+export const AVATAR_COLUMNS = 5
 export const WALK_CYCLE = [1, 2, 3, 2] as const
+export const SIT_COLUMN = 4
 // The lowest drawn row of a frame (shoe outline): the bottom of the 20x12 body box, 18 px below the centre.
 export const AVATAR_FEET_ROW = 42
 
@@ -106,15 +107,25 @@ function stride(column: number): -1 | 0 | 1 {
 }
 
 function drawFront(f: Frame, column: number, back: boolean): void {
+  const sitting = column === SIT_COLUMN
   const s = stride(column)
-  const bob = s === 0 ? 0 : 1
-  // Legs (not bobbed). A forward leg reaches one row lower, the other foot is lifted.
-  for (const [x, lift] of [
-    [11, -s],
-    [17, s],
-  ] as const) {
-    f.rect(x, 34, 4, 6 + lift, C.pants)
-    f.rect(x, 40 + lift, 4, 2, C.shoes)
+  // Seated, the body sits 2 px lower.
+  const bob = sitting ? 2 : s === 0 ? 0 : 1
+  if (sitting) {
+    // The knees point at the viewer, so the legs look short; from behind the seat hides them.
+    if (!back) for (const x of [11, 17]) {
+      f.rect(x, 35, 4, 3, C.pants)
+      f.rect(x, 38, 4, 2, C.shoes)
+    }
+  } else {
+    // Legs (not bobbed). A forward leg reaches one row lower, the other foot is lifted.
+    for (const [x, lift] of [
+      [11, -s],
+      [17, s],
+    ] as const) {
+      f.rect(x, 34, 4, 6 + lift, C.pants)
+      f.rect(x, 40 + lift, 4, 2, C.shoes)
+    }
   }
   // Arms swing against the legs.
   for (const [x, swing] of [
@@ -152,18 +163,26 @@ function drawFront(f: Frame, column: number, back: boolean): void {
 
 // Facing left. The right frames are mirror images.
 function drawSide(f: Frame, column: number): void {
+  const sitting = column === SIT_COLUMN
   const s = stride(column)
-  const bob = s === 0 ? 0 : 1
+  const bob = sitting ? 2 : s === 0 ? 0 : 1
   // Back leg first, so the front leg covers it. A leg reaches forward (left) or back by 3 px at the foot.
   const legs: Array<[hip: number, reach: number]> = s === 0 ? [[14, 0]] : [
     [15, 3 * s],
     [14, -3 * s],
   ]
-  for (const [hip, reach] of legs) {
-    f.rect(hip, 34, 3, 2, C.pants)
-    f.rect(hip + Math.trunc(reach / 2), 36, 3, 2, C.pants)
-    f.rect(hip + reach, 38, 3, 2, C.pants)
-    f.rect(hip + reach - 1, 40, 4, 2, C.shoes)
+  if (sitting) {
+    // Thigh forward, shin down.
+    f.rect(9, 34, 8, 3, C.pants)
+    f.rect(9, 37, 3, 3, C.pants)
+    f.rect(8, 40, 4, 2, C.shoes)
+  } else {
+    for (const [hip, reach] of legs) {
+      f.rect(hip, 34, 3, 2, C.pants)
+      f.rect(hip + Math.trunc(reach / 2), 36, 3, 2, C.pants)
+      f.rect(hip + reach, 38, 3, 2, C.pants)
+      f.rect(hip + reach - 1, 40, 4, 2, C.shoes)
+    }
   }
   f.rect(17 + s, 24 + bob, 2, 8, C.shirtShade)
   f.rect(12, 23 + bob, 8, 11, C.shirt)

@@ -5,8 +5,10 @@ import {
   CreateCompanyResponseSchema,
   CreateInviteLinkResponseSchema,
   InviteLinkInfoResponseSchema,
+  ListInviteLinksResponseSchema,
   MeResponseSchema,
   OfficeResponseSchema,
+  RevokeInviteLinkResponseSchema,
   RtTokenResponseSchema,
   type AcceptInviteLinkResponse,
   type ClientConfigResponse,
@@ -15,8 +17,10 @@ import {
   type CreateInviteLinkRequest,
   type CreateInviteLinkResponse,
   type InviteLinkInfoResponse,
+  type ListInviteLinksResponse,
   type MeResponse,
   type OfficeResponse,
+  type RevokeInviteLinkResponse,
   type RtTokenResponse,
 } from '@vo/shared'
 import { apiRequest, isApiError } from './http.ts'
@@ -38,6 +42,12 @@ export const fetchOffice = (officeId: string): Promise<OfficeResponse> => apiReq
 
 export const createInviteLink = (officeId: string, body: CreateInviteLinkRequest): Promise<CreateInviteLinkResponse> =>
   apiRequest(API.inviteLinks(officeId), CreateInviteLinkResponseSchema, { body })
+
+export const listInviteLinks = (officeId: string): Promise<ListInviteLinksResponse> =>
+  apiRequest(API.inviteLinks(officeId), ListInviteLinksResponseSchema)
+
+export const revokeInviteLink = (officeId: string, linkId: string): Promise<RevokeInviteLinkResponse> =>
+  apiRequest(API.officeInviteLink(officeId, linkId), RevokeInviteLinkResponseSchema, { method: 'DELETE' })
 
 export const fetchInviteLink = (token: string): Promise<InviteLinkInfoResponse> =>
   apiRequest(API.inviteLink(token), InviteLinkInfoResponseSchema)

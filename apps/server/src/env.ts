@@ -5,14 +5,16 @@ import { z } from 'zod'
 const SERVER_DIR = fileURLToPath(new URL('..', import.meta.url))
 const REPO_DIR = resolve(SERVER_DIR, '../..')
 export const DEV_AUTH_SECRET = 'dev-only-better-auth-secret-never-use-in-production'
+const DEV_CLIENT_ORIGIN = 'http://localhost:8000'
 
 const origin = z.url().transform((value) => new URL(value).origin)
 
 const EnvSchema = z.object({
-  NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
+  // Required, so a production server never runs with the development defaults by mistake (npm run dev sets it).
+  NODE_ENV: z.enum(['development', 'test', 'production'], { error: 'NODE_ENV must be development, test or production' }),
   PORT: z.coerce.number().int().min(0).max(65535).default(2567),
   // The browser origin of the client. Only this origin may call the API with credentials.
-  CLIENT_ORIGIN: origin.default('http://localhost:8000'),
+  CLIENT_ORIGIN: origin.optional(),
   BETTER_AUTH_SECRET: z.string().min(32).optional(),
   // The public origin of the auth API. In dev the browser reaches it through the Vite proxy (the client origin).
   BETTER_AUTH_URL: origin.optional(),
@@ -70,6 +72,7 @@ export function loadEnv(source: Record<string, string | undefined> = process.env
   const isProduction = e.NODE_ENV === 'production'
   const issues: string[] = []
   if (isProduction) {
+    if (!e.CLIENT_ORIGIN) issues.push('CLIENT_ORIGIN is required')
     if (!e.BETTER_AUTH_SECRET || e.BETTER_AUTH_SECRET === DEV_AUTH_SECRET) issues.push('BETTER_AUTH_SECRET is required')
     if (!e.BETTER_AUTH_URL) issues.push('BETTER_AUTH_URL is required')
     if (!e.DATABASE_URL) issues.push('DATABASE_URL is required (PGlite is for development and tests)')
@@ -83,13 +86,14 @@ export function loadEnv(source: Record<string, string | undefined> = process.env
 
   const dataDir = isAbsolute(e.DATA_DIR) ? e.DATA_DIR : resolve(REPO_DIR, e.DATA_DIR)
   const pgliteDir = e.PGLITE_DIR ?? (e.NODE_ENV === 'test' ? 'memory://' : join(dataDir, 'pglite'))
+  const clientOrigin = e.CLIENT_ORIGIN ?? DEV_CLIENT_ORIGIN
   return {
     NODE_ENV: e.NODE_ENV,
     isProduction,
     PORT: e.PORT,
-    CLIENT_ORIGIN: e.CLIENT_ORIGIN,
+    CLIENT_ORIGIN: clientOrigin,
     BETTER_AUTH_SECRET: e.BETTER_AUTH_SECRET ?? DEV_AUTH_SECRET,
-    BETTER_AUTH_URL: e.BETTER_AUTH_URL ?? e.CLIENT_ORIGIN,
+    BETTER_AUTH_URL: e.BETTER_AUTH_URL ?? clientOrigin,
     DATABASE_URL: e.DATABASE_URL,
     DATA_DIR: dataDir,
     PGLITE_DIR: pgliteDir === 'memory://' || isAbsolute(pgliteDir) ? pgliteDir : resolve(REPO_DIR, pgliteDir),

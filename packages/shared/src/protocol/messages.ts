@@ -48,11 +48,11 @@ export type SitResponse = z.infer<typeof SitResponseSchema>
 export const SIT_REJECT_REASONS = ['taken', 'far', 'not_allowed', 'invalid'] as const
 export type SitRejectReason = (typeof SIT_REJECT_REASONS)[number]
 
-// Request 'seat:stand'. Always ok. The avatar stays where it sat when its body fits there; otherwise the server
-// moves it to the nearest free spot (read the new position from the state).
+// Request 'seat:stand'. Always ok for a player in the room ('invalid' otherwise). The avatar stays where it sat when its body fits there; otherwise the server
+// moves it to the nearest free spot. (x, y) is where it stands (sprite centre).
 export const StandRequestSchema = z.object({})
 export type StandRequest = z.infer<typeof StandRequestSchema>
-export const StandResponseSchema = z.object({ ok: z.literal(true) })
+export const StandResponseSchema = z.object({ ok: z.literal(true), x: coord, y: coord })
 export type StandResponse = z.infer<typeof StandResponseSchema>
 
 export const MSG = {
@@ -74,7 +74,7 @@ export interface ServerMessages {
 
 export interface RoomRequests {
   [MSG.sit]: { request: SitRequest; response: SitResponse; reject: SitRejectReason }
-  [MSG.stand]: { request: StandRequest; response: StandResponse; reject: never }
+  [MSG.stand]: { request: StandRequest; response: StandResponse; reject: 'invalid' }
 }
 
 // @colyseus/sdk rejects room.request() with an Error named 'rejected' whose `reason` is the ctx.reject() value.

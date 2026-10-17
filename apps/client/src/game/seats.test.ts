@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { SIT_RADIUS, type SeatDef } from '@vo/shared'
-import { nearestFreeSeat, seatHint, sitRejectText } from './seats.ts'
+import { nearestFreeSeat, SEAT_HINT_RADIUS, seatHint, sitRejectText } from './seats.ts'
 
 const seat = (id: string, x: number, y: number, hasComputer = false): SeatDef => ({
   id,
@@ -20,6 +20,12 @@ describe('nearestFreeSeat', () => {
     expect(nearestFreeSeat(seats, { x: 120, y: 100 }, (id) => id !== 'b')?.id).toBe('a')
     expect(nearestFreeSeat(seats, { x: 100 + SIT_RADIUS, y: 100 }, (id) => id === 'a')?.id).toBe('a')
     expect(nearestFreeSeat(seats, { x: 100 - SIT_RADIUS - 1, y: 100 }, () => true)).toBeNull()
+  })
+
+  it('hints a seat 8 px closer than the server allows', () => {
+    expect(SIT_RADIUS - SEAT_HINT_RADIUS).toBe(8)
+    expect(nearestFreeSeat(seats, { x: 100 - SEAT_HINT_RADIUS, y: 100 }, () => true, SEAT_HINT_RADIUS)?.id).toBe('a')
+    expect(nearestFreeSeat(seats, { x: 100 - SEAT_HINT_RADIUS - 1, y: 100 }, () => true, SEAT_HINT_RADIUS)).toBeNull()
   })
 })
 
