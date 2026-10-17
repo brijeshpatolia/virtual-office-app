@@ -10,11 +10,21 @@ import {
   objectOf,
   parsedWith,
   parseIssues,
+  props,
   removeLayer,
   removeProp,
   setProp,
   tileLayerOf,
 } from './helpers/tiledMap.ts'
+
+const s1 = {
+  id: 's1',
+  zoneId: 'room',
+  ...center(2, 2),
+  facing: 'down',
+  hasComputer: true,
+  computer: { col: 3, row: 2 },
+}
 
 describe('parseOfficeMap', () => {
   it('reads the map, its layers and every object class', () => {
@@ -29,7 +39,8 @@ describe('parseOfficeMap', () => {
       heightPx: 256,
       templateId: 'test-10x8',
       templateVersion: 1,
-      tilesetNames: ['Test'],
+      tilesets: [{ name: 'Test', image: 'test.png', firstGid: 1 }],
+      computerGids: [COMPUTER_GID],
     })
     expect(map.tileLayers.map((l) => l.name)).toEqual(['Ground', 'Obj_layer1', 'Obj_layer2', 'Obj_layer3', 'Computers', 'Above'])
     expect(map.tileLayers[4]?.data[2 * 10 + 3]).toBe(COMPUTER_GID)
@@ -42,9 +53,11 @@ describe('parseOfficeMap', () => {
       priority: 2,
       rect: { x: 32, y: 32, w: 128, h: 192 },
     })
-    expect(map.seats[0]).toEqual({ id: 's1', zoneId: 'room', ...center(2, 2), facing: 'down', hasComputer: true })
+    expect(map.seats[0]).toEqual(s1)
+    expect(map.seats[1]?.computer).toBeNull()
     expect(map.whiteboards).toEqual([{ id: 'wb1', zoneId: 'room', rect: { x: 32, y: 32, w: 64, h: 32 } }])
     expect(map.signage).toEqual([{ id: 'sign1', rect: { x: 192, y: 32, w: 32, h: 32 } }])
+    expect(map.doors).toEqual([{ id: 'door1', rect: { x: 160, y: 96, w: 32, h: 32 } }])
     expect(map.stairs).toEqual([{ targetFloor: '', rect: { x: 192, y: 192, w: 32, h: 32 } }])
     expect(map.colliders).toHaveLength(7)
     expect(map.colliders.at(-1)).toEqual({ name: 'table', kind: 'furniture', rect: { x: 64, y: 96, w: 64, h: 32 } })
@@ -70,7 +83,7 @@ describe('parseOfficeMap', () => {
       Object.assign(seat, { someFutureField: 1 })
       Object.assign(m, { editorsettings: { export: { format: 'json' } } })
     })
-    expect(map.seats[0]).toEqual({ id: 's1', zoneId: 'room', ...center(2, 2), facing: 'down', hasComputer: true })
+    expect(map.seats[0]).toEqual(s1)
   })
 
   it('treats a property without a type as a string, like older Tiled versions', () => {
@@ -79,6 +92,20 @@ describe('parseOfficeMap', () => {
       if (prop) delete prop.type
     })
     expect(map.seats[0]?.facing).toBe('down')
+  })
+
+  it('reads computer=true tile properties as gids and ignores other tile properties', () => {
+    const map = parsedWith((m) => {
+      const tiles = [
+        { id: 9, properties: props({ computer: true, label: 'laptop' }) },
+        { id: 10, properties: props({ computer: false }) },
+        { id: 11, properties: props({ label: 'desk' }) },
+        { id: 12 },
+      ]
+      m.tilesets.push({ firstgid: 513, name: 'More', image: 'more.png', tiles })
+    })
+    expect(map.computerGids).toEqual([COMPUTER_GID, 522])
+    expect(map.tilesets.map((t) => t.name)).toEqual(['Test', 'More'])
   })
 
   it('takes object ids from properties, not from the object order', () => {
@@ -134,6 +161,29 @@ describe('parseOfficeMap', () => {
         (m) => setProp(objectOf(m, 'Zones', 'room'), 'mediaMode', 'group'),
         /property "mediaMode" must be one of proximity, room; got "group"/,
       ],
+      ['only one computer cell property', (m) => removeProp(objectOf(m, 'Seats', 's1'), 'computerRow'), /"s1": set both computerCol and computerRow, or neither/],
+      [
+        'a computer cell stored as a string',
+        (m) => setProp(objectOf(m, 'Seats', 's1'), 'computerCol', '3', 'string'),
+        /"s1": property "computerCol" must be int, got string "3"/,
+      ],
+      [
+        'a computer tile property of the wrong type',
+        (m) => m.tilesets.push({ firstgid: 513, name: 'More', image: 'more.png', tiles: [{ id: 4, properties: props({ computer: 'yes' }) }] }),
+        /tileset "More" \(firstgid 513\) > tile 4: property "computer" must be bool, got string "yes"/,
+      ],
+      [
+        'an image collection tileset',
+        (m) => m.tilesets.push({ firstgid: 513, name: 'Icons', tiles: [{ id: 0, image: 'icon.png' }] }),
+        /tileset "Icons" \(firstgid 513\): needs one image; image collection tilesets are not supported/,
+      ],
+      [
+        'two tilesets with the same name',
+        (m) => m.tilesets.push({ firstgid: 513, name: 'Test', image: 'other.png' }),
+        /tileset "Test" \(firstgid 513\): another tileset has the same name/,
+      ],
+      ['a door without doorId', (m) => removeProp(objectOf(m, 'Interactables', 'door1'), 'doorId'), /"door1": missing property "doorId" \(string\)/],
+      ['a point door', (m) => Object.assign(objectOf(m, 'Interactables', 'door1'), { point: true, width: 0, height: 0 }), /"door1": must be a rectangle, got a point/],
       ['an unknown facing', (m) => setProp(objectOf(m, 'Seats', 's1'), 'facing', 'north'), /"facing" must be one of up, down, left, right/],
       ['an unknown collider kind', (m) => setProp(objectOf(m, 'Collision', 'table'), 'kind', 'glass'), /"kind" must be one of wall, furniture/],
       ['a negative capacity', (m) => setProp(objectOf(m, 'Zones', 'room'), 'capacity', -1), /capacity must be 0 \(no limit\) or more/],

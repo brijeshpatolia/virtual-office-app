@@ -7,9 +7,9 @@ import { validateOfficeMap, type IssueCode } from '../../src/validate.ts'
 //      0123456789
 //   0  ##########     # wall          R meeting room "room" (cols 1-4, rows 1-6)
 //   1  #RRRR#OOO#     T table         O open plan "open" (cols 6-8, rows 1-6)
-//   2  #RSRC#O*O#     S seat          D desk zone "desk" nested in open (cols 7-8, rows 4-6)
-//   3  #RTTR.OOO#     C computer tile . door (5,3), in no zone
-//   4  #RRRR#ODD#     * spawn "main"
+//   2  #RSCR#O*O#     S seat          D desk zone "desk" nested in open (cols 7-8, rows 4-6)
+//   3  #RTTR.OOO#     C computer tile of s1 (tile property computer=true)
+//   4  #RRRR#ODD#     * spawn "main"  . door "door1" (5,3), in no zone
 //   5  #RRRR#ODS#
 //   6  #RRRR#ODD#
 //   7  ##########
@@ -95,6 +95,8 @@ export const W = 10
 export const H = 8
 export const T = 32
 export const COMPUTER_GID = 300
+// A tile without the computer property, e.g. a desk.
+export const PLAIN_GID = 5
 
 export type PropValue = string | number | boolean
 
@@ -164,12 +166,20 @@ export function baseTiledMap(): TestMap {
       zone('desk', cells(7, 4, 8, 6), { zoneType: 'desk', mediaMode: 'proximity', capacity: 0, lockable: false, priority: 1 }),
     ]),
     objectLayer(8, 'Seats', [
-      pointObject('seat', 's1', s1.x, s1.y, { seatId: 's1', zoneId: 'room', facing: 'down', hasComputer: true }),
+      pointObject('seat', 's1', s1.x, s1.y, {
+        seatId: 's1',
+        zoneId: 'room',
+        facing: 'down',
+        hasComputer: true,
+        computerCol: 3,
+        computerRow: 2,
+      }),
       pointObject('seat', 's2', s2.x, s2.y, { seatId: 's2', zoneId: 'desk', facing: 'up', hasComputer: false }),
     ]),
     objectLayer(9, 'Interactables', [
       rectObject('whiteboard', 'wb1', cells(1, 1, 2, 1), { boardId: 'wb1', zoneId: 'room' }),
       rectObject('signage', 'sign1', cells(6, 1), { slotId: 'sign1' }),
+      rectObject('door', 'door1', cells(5, 3), { doorId: 'door1' }),
       rectObject('stairs', 'stairs', cells(6, 6), { targetFloor: '' }),
     ]),
     objectLayer(10, 'Collision', [
@@ -210,6 +220,7 @@ export function baseTiledMap(): TestMap {
         tileheight: 32,
         margin: 0,
         spacing: 0,
+        tiles: [{ id: COMPUTER_GID - 1, properties: props({ computer: true }) }],
       },
     ],
     layers,

@@ -15,7 +15,7 @@ export function DebugHint() {
 
   return (
     <div data-testid="debug-hint" style={hintStyle}>
-      Press <kbd style={kbdStyle}>`</kbd> {debugOn ? 'to hide map debug' : 'for map debug'}
+      Press <kbd style={kbdStyle}>`</kbd> (the key left of 1) {debugOn ? 'to hide map debug' : 'for map debug'}
     </div>
   )
 }

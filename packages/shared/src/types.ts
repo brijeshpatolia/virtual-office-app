@@ -20,6 +20,12 @@ export interface Rect {
   h: number
 }
 
+// A tile position: column and row, counting from 0.
+export interface Cell {
+  col: number
+  row: number
+}
+
 export interface ZoneDef {
   id: string
   zoneType: ZoneType
@@ -37,6 +43,8 @@ export interface SeatDef {
   y: number
   facing: Facing
   hasComputer: boolean
+  // The tile of this seat's own computer sprite (seat properties computerCol and computerRow).
+  computer: Cell | null
 }
 
 export interface WhiteboardDef {
@@ -46,6 +54,11 @@ export interface WhiteboardDef {
 }
 
 export interface SignageDef {
+  id: string
+  rect: Rect
+}
+
+export interface DoorDef {
   id: string
   rect: Rect
 }
@@ -67,6 +80,13 @@ export interface SpawnDef {
   y: number
 }
 
+export interface TilesetDef {
+  name: string
+  // Path of the tileset image, relative to the map file.
+  image: string
+  firstGid: number
+}
+
 export interface TileLayerData {
   name: string
   width: number
@@ -83,12 +103,15 @@ export interface OfficeMap {
   heightPx: number
   templateId: string
   templateVersion: number
-  tilesetNames: string[]
+  tilesets: TilesetDef[]
+  // Gids of the tiles whose tileset marks them with the bool property computer=true.
+  computerGids: number[]
   tileLayers: TileLayerData[]
   zones: ZoneDef[]
   seats: SeatDef[]
   whiteboards: WhiteboardDef[]
   signage: SignageDef[]
+  doors: DoorDef[]
   stairs: StairsDef[]
   colliders: ColliderDef[]
   spawns: SpawnDef[]

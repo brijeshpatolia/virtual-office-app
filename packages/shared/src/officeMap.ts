@@ -2,6 +2,7 @@ import { REQUIRED_OBJECT_LAYERS, REQUIRED_TILE_LAYERS } from './constants.ts'
 import { emptyMapObjects, LAYER_CLASSES, readObjectLayer } from './mapObjects.ts'
 import { readProperties } from './properties.ts'
 import { describePath, RawMapSchema, type RawLayer, type RawMap } from './tiled.ts'
+import { readTilesets } from './tilesets.ts'
 import type { OfficeMap, TileLayerData } from './types.ts'
 
 export class OfficeMapError extends Error {
@@ -24,6 +25,7 @@ export function parseOfficeMap(json: unknown): OfficeMap {
   const issues: string[] = []
 
   checkMapFormat(raw, issues)
+  const { tilesets, computerGids } = readTilesets(raw.tilesets, issues)
   const layers = layersByName(raw.layers, issues)
   checkRequiredLayers(layers, issues)
 
@@ -34,8 +36,8 @@ export function parseOfficeMap(json: unknown): OfficeMap {
   }
 
   const mapProps = readProperties(raw.properties, 'map', issues)
-  const templateId = mapProps.optionalString('templateId', '')
-  const templateVersion = mapProps.optionalInt('templateVersion', 0)
+  const templateId = mapProps.optionalString('templateId') ?? ''
+  const templateVersion = mapProps.optionalInt('templateVersion') ?? 0
   const tileLayers = readTileLayers(raw, issues)
 
   if (issues.length > 0) throw new OfficeMapError(issues)
@@ -48,7 +50,8 @@ export function parseOfficeMap(json: unknown): OfficeMap {
     heightPx: raw.height * raw.tileheight,
     templateId,
     templateVersion,
-    tilesetNames: raw.tilesets.map((t) => t.name ?? ''),
+    tilesets,
+    computerGids,
     tileLayers,
     ...objects,
   }
@@ -57,11 +60,6 @@ export function parseOfficeMap(json: unknown): OfficeMap {
 function checkMapFormat(raw: RawMap, issues: string[]): void {
   if (raw.orientation !== 'orthogonal') issues.push(`map: orientation must be orthogonal, got ${raw.orientation}`)
   if (raw.infinite === true) issues.push('map: infinite maps are not supported')
-  raw.tilesets.forEach((t, i) => {
-    const label = `tileset ${t.name ? `"${t.name}"` : `#${i}`} (firstgid ${t.firstgid})`
-    if (t.source !== undefined) issues.push(`${label}: external tileset "${t.source}"; embed it in the map`)
-    else if (!t.name) issues.push(`${label}: embedded tileset needs a name`)
-  })
 }
 
 function layersByName(layers: readonly RawLayer[], issues: string[]): Map<string, RawLayer> {

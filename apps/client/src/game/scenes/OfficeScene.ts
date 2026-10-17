@@ -1,26 +1,21 @@
 import Phaser from 'phaser'
-import { REQUIRED_TILE_LAYERS, type OfficeMap } from '@vo/shared'
+import { REQUIRED_TILE_LAYERS, type OfficeMap, type TilesetDef } from '@vo/shared'
 import { EventBus } from '../EventBus.ts'
 import { cameraBounds, fitZoom, type Size } from '../cameraFit.ts'
-import { MAP_DEBUG_KEY_CODE, mapDebugFromQuery } from '../debug/debugFlag.ts'
+import { isMapDebugKey, mapDebugFromQuery } from '../debug/debugFlag.ts'
 import { MapDebugOverlay } from '../debug/MapDebugOverlay.ts'
 import { TILE_LAYER_DEPTH, type TileLayerName } from '../depth.ts'
 import { createObstacles } from '../obstacles.ts'
+import { onSceneEnd } from '../onSceneEnd.ts'
 import { readOfficeMap } from '../readOfficeMap.ts'
 import { watchZoneHover } from '../zoneHover.ts'
 
 const MAP_KEY = 'office-map'
-const MAP_DIR = 'assets/map'
+// From the site root, so the map also loads on a nested URL such as /invite/abc.
+const MAP_DIR = `${import.meta.env.BASE_URL}assets/map`
 
-// Texture keys equal the tileset names inside map.json.
-const TILESET_IMAGES = [
-  'Room_Builder_Office',
-  'Room_Builder_Floors',
-  'Room_Builder_Walls',
-  'Generic',
-  'Modern_Office_Black_Shadow',
-  'Classroom_and_library',
-] as const
+// Tileset image paths in map.json are relative to the map file.
+const tilesetUrl = (tileset: TilesetDef): string => `${MAP_DIR}/${tileset.image}`
 
 export class OfficeScene extends Phaser.Scene {
   readonly layers = new Map<TileLayerName, Phaser.Tilemaps.TilemapLayer>()
@@ -35,14 +30,21 @@ export class OfficeScene extends Phaser.Scene {
   }
 
   preload() {
-    for (const name of TILESET_IMAGES) this.load.image(name, `${MAP_DIR}/${name}.png`)
     this.load.tilemapTiledJSON(MAP_KEY, `${MAP_DIR}/map.json`)
+    // A restart finds the map and its images in the caches already.
+    if (this.cache.tilemap.exists(MAP_KEY)) return
+    // map.json names the tileset images, so they join the same load once it is in the cache.
+    this.load.once(`${Phaser.Loader.Events.FILE_KEY_COMPLETE}tilemapJSON-${MAP_KEY}`, () => {
+      this.officeMap = readOfficeMap(this, MAP_KEY)
+      // The texture key is the tileset name.
+      for (const tileset of this.officeMap.tilesets) this.load.image(tileset.name, tilesetUrl(tileset))
+    })
   }
 
   create() {
-    this.officeMap = readOfficeMap(this, MAP_KEY)
+    if (!this.cache.tilemap.exists(MAP_KEY)) throw new Error(`Office map ${MAP_DIR}/map.json did not load`)
     const tilemap = this.make.tilemap({ key: MAP_KEY })
-    const tilesets = this.officeMap.tilesetNames.map((name) => addTileset(tilemap, name))
+    const tilesets = this.officeMap.tilesets.map((tileset) => addTileset(tilemap, tileset))
 
     this.layers.clear()
     for (const name of REQUIRED_TILE_LAYERS) {
@@ -55,14 +57,12 @@ export class OfficeScene extends Phaser.Scene {
     this.fitCamera(this.scale.gameSize)
 
     this.scale.on(Phaser.Scale.Events.RESIZE, this.fitCamera, this)
-    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
-      this.scale.off(Phaser.Scale.Events.RESIZE, this.fitCamera, this)
-    })
+    onSceneEnd(this, () => this.scale.off(Phaser.Scale.Events.RESIZE, this.fitCamera, this))
 
     this.debugOverlay = new MapDebugOverlay(this, this.officeMap)
     this.setMapDebug(mapDebugFromQuery(window.location.search))
     this.input.keyboard?.on(Phaser.Input.Keyboard.Events.ANY_KEY_DOWN, (event: KeyboardEvent) => {
-      if (event.code === MAP_DEBUG_KEY_CODE && !event.repeat) this.setMapDebug(!this.debugOverlay.visible)
+      if (isMapDebugKey(event) && !event.repeat) this.setMapDebug(!this.debugOverlay.visible)
     })
     watchZoneHover(this, this.officeMap)
 
@@ -84,9 +84,9 @@ export class OfficeScene extends Phaser.Scene {
   }
 }
 
-function addTileset(map: Phaser.Tilemaps.Tilemap, name: string): Phaser.Tilemaps.Tileset {
-  const tileset = map.addTilesetImage(name, name)
-  if (!tileset) throw new Error(`Tileset "${name}" has no image; add it to TILESET_IMAGES in OfficeScene.ts`)
+function addTileset(map: Phaser.Tilemaps.Tilemap, def: TilesetDef): Phaser.Tilemaps.Tileset {
+  const tileset = map.addTilesetImage(def.name, def.name)
+  if (!tileset) throw new Error(`Tileset "${def.name}": its image ${tilesetUrl(def)} did not load; check "image" in map.json`)
   return tileset
 }
 

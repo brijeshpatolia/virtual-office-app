@@ -1,7 +1,9 @@
 import { REQUIRED_TILE_LAYERS, TILE } from './constants.ts'
 import { rectInside, rectsEqual, rectsOverlap } from './geometry.ts'
 import { buildGrid } from './grid.ts'
-import { checkComputers, checkSeats, checkSpawn } from './validateSeats.ts'
+import { checkComputers } from './validateComputers.ts'
+import { checkDoors } from './validateDoors.ts'
+import { checkSeats, checkSpawn } from './validateSeats.ts'
 import { MEDIA_MODES, type ColliderKind, type OfficeMap } from './types.ts'
 
 export type IssueCode =
@@ -17,6 +19,8 @@ export type IssueCode =
   | 'seat-unreachable'
   | 'seat-computer'
   | 'whiteboard-zone'
+  | 'door-zone'
+  | 'door-blocked'
   | 'spawn-main'
   | 'spawn-blocked'
   | 'template-id'
@@ -25,7 +29,7 @@ export type IssueCode =
 export interface ValidationIssue {
   code: IssueCode
   message: string
-  // The id of the zone, seat, board, slot or spawn the issue is about.
+  // The id of the zone, seat, board, slot, door or spawn the issue is about.
   ref?: string
 }
 
@@ -35,6 +39,7 @@ export interface OfficeMapSummary {
   computerSeats: number
   whiteboards: number
   signage: number
+  doors: number
   stairs: number
   colliders: Record<ColliderKind, number>
   spawns: number
@@ -52,6 +57,7 @@ export function validateOfficeMap(map: OfficeMap): ValidationIssue[] {
     ...checkSeats(map, grids),
     ...checkComputers(map),
     ...checkWhiteboards(map),
+    ...checkDoors(map, grids),
     ...checkSpawn(map, grids),
   ]
 }
@@ -65,6 +71,7 @@ export function summarizeOfficeMap(map: OfficeMap): OfficeMapSummary {
     computerSeats: map.seats.filter((s) => s.hasComputer).length,
     whiteboards: map.whiteboards.length,
     signage: map.signage.length,
+    doors: map.doors.length,
     stairs: map.stairs.length,
     colliders,
     spawns: map.spawns.length,
@@ -106,6 +113,7 @@ function checkUniqueIds(map: OfficeMap): ValidationIssue[] {
     ['seatId', map.seats],
     ['boardId', map.whiteboards],
     ['slotId', map.signage],
+    ['doorId', map.doors],
     ['spawnId', map.spawns],
   ]
   const issues: ValidationIssue[] = []

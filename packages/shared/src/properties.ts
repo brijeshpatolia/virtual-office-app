@@ -9,8 +9,10 @@ export interface PropertyReader {
   int(name: string): number
   bool(name: string): boolean
   oneOf<T extends string>(name: string, values: readonly [T, ...T[]]): T
-  optionalString(name: string, fallback: string): string
-  optionalInt(name: string, fallback: number): number
+  // undefined when the property is missing; a wrong type is still an issue.
+  optionalString(name: string): string | undefined
+  optionalInt(name: string): number | undefined
+  optionalBool(name: string): boolean | undefined
 }
 
 const isString = (v: unknown): v is string => typeof v === 'string'
@@ -56,6 +58,10 @@ export function readProperties(
     const v = value(name, 'int', required, isInt)
     return isInt(v) ? v : undefined
   }
+  const bool = (name: string, required: boolean): boolean | undefined => {
+    const v = value(name, 'bool', required, isBool)
+    return isBool(v) ? v : undefined
+  }
 
   return {
     string: (name) => str(name, true) ?? '',
@@ -65,10 +71,7 @@ export function readProperties(
       return v ?? ''
     },
     int: (name) => int(name, true) ?? 0,
-    bool(name) {
-      const v = value(name, 'bool', true, isBool)
-      return isBool(v) ? v : false
-    },
+    bool: (name) => bool(name, true) ?? false,
     oneOf(name, values) {
       const v = str(name, true)
       if (v === undefined) return values[0]
@@ -76,7 +79,8 @@ export function readProperties(
       issues.push(`${where}: property "${name}" must be one of ${values.join(', ')}; got "${v}"`)
       return values[0]
     },
-    optionalString: (name, fallback) => str(name, false) ?? fallback,
-    optionalInt: (name, fallback) => int(name, false) ?? fallback,
+    optionalString: (name) => str(name, false),
+    optionalInt: (name) => int(name, false),
+    optionalBool: (name) => bool(name, false),
   }
 }

@@ -8,7 +8,8 @@
     "packages/*"
   ],
   "engines": {
-    "node": ">=22.18.0"
+    "node": "^22.18.0 || ^24.0.0 || >=26.0.0",
+    "npm": ">=11"
   },
   "scripts": {
     "dev": "npm run dev --workspace @vo/client",
@@ -21,9 +22,9 @@
     "check": "npm run typecheck && npm run lint && npm test && npm run validate:map && npm run build"
   },
   "devDependencies": {
-    "@eslint/js": "9.39.5",
+    "@eslint/js": "10.0.1",
     "@types/node": "24.19.2",
-    "eslint": "9.39.5",
+    "eslint": "10.12.0",
     "eslint-plugin-react-hooks": "7.1.1",
     "globals": "17.13.0",
     "typescript": "6.0.3",

@@ -1,4 +1,4 @@
-import { COMPUTER_TILE_LAYERS, MAIN_SPAWN_ID, SIT_RADIUS } from './constants.ts'
+import { MAIN_SPAWN_ID, SIT_RADIUS } from './constants.ts'
 import { distance } from './geometry.ts'
 import { cellAt, cellCenter, cellKey, reachableCells, type Grid } from './grid.ts'
 import type { OfficeMap, SeatDef, SpawnDef } from './types.ts'
@@ -35,21 +35,6 @@ export function checkSeats(map: OfficeMap, { walls, solid }: MapGrids): Validati
   return issues
 }
 
-export function checkComputers(map: OfficeMap): ValidationIssue[] {
-  const names: readonly string[] = COMPUTER_TILE_LAYERS
-  const layers = map.tileLayers.filter((l) => names.includes(l.name))
-  const hasTile = (col: number, row: number): boolean =>
-    col >= 0 && row >= 0 && col < map.width && row < map.height &&
-    layers.some((l) => (l.data[row * l.width + col] ?? 0) !== 0)
-  return map.seats
-    .filter((seat) => seat.hasComputer && !nearTile(map, seat, hasTile))
-    .map((seat) => ({
-      code: 'seat-computer',
-      message: `seat "${seat.id}" has a computer but no tile in ${COMPUTER_TILE_LAYERS.join(' or ')} within 1 tile`,
-      ref: seat.id,
-    }))
-}
-
 export function checkSpawn(map: OfficeMap, { solid }: MapGrids): ValidationIssue[] {
   const count = map.spawns.filter((s) => s.id === MAIN_SPAWN_ID).length
   if (count !== 1) {
@@ -75,18 +60,6 @@ function reachableWithin(grid: Grid, reachable: ReadonlySet<string>, seat: SeatD
     for (let col = from.col; col <= to.col; col++) {
       const center = cellCenter(grid, col, row)
       if (reachable.has(cellKey(col, row)) && distance(seat.x, seat.y, center.x, center.y) <= radius) return true
-    }
-  }
-  return false
-}
-
-// Chebyshev distance 1 around the seat cell.
-function nearTile(map: OfficeMap, seat: SeatDef, hasTile: (col: number, row: number) => boolean): boolean {
-  const col = Math.floor(seat.x / map.tileWidth)
-  const row = Math.floor(seat.y / map.tileHeight)
-  for (let dr = -1; dr <= 1; dr++) {
-    for (let dc = -1; dc <= 1; dc++) {
-      if (hasTile(col + dc, row + dr)) return true
     }
   }
   return false

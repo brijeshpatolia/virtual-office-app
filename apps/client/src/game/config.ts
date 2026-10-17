@@ -20,3 +20,8 @@ export function createGameConfig(parent: HTMLElement): Phaser.Types.Core.GameCon
     scene: [OfficeScene],
   }
 }
+
+// StrictMode Fast Refresh does not re-run PhaserGame's [] effect, so a hot update would keep the old game running.
+// Reload the page when this module or anything it imports (scenes, @vo/shared) changes.
+// An edit to PhaserGame.tsx itself still keeps the old game until you reload.
+import.meta.hot?.accept(() => window.location.reload())

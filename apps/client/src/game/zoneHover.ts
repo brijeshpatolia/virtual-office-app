@@ -1,6 +1,7 @@
 import Phaser from 'phaser'
 import { zoneAt, type OfficeMap, type ZoneDef } from '@vo/shared'
 import { EventBus, type ZoneHover } from './EventBus.ts'
+import { onSceneEnd } from './onSceneEnd.ts'
 
 export function toZoneHover(zone: ZoneDef | null): ZoneHover | null {
   return zone && { zoneId: zone.id, zoneType: zone.zoneType, mediaMode: zone.mediaMode }
@@ -21,5 +22,5 @@ export function watchZoneHover(scene: Phaser.Scene, map: OfficeMap): void {
     update(zoneAt(map, world.x, world.y))
   })
   scene.input.on(Phaser.Input.Events.GAME_OUT, () => update(null))
-  scene.events.once(Phaser.Scenes.Events.SHUTDOWN, () => update(null))
+  onSceneEnd(scene, () => update(null))
 }

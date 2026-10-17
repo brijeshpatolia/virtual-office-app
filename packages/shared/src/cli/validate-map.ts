@@ -31,6 +31,7 @@ function main(args: readonly string[]): number {
   console.log(`  seats:          ${s.seats}`)
   console.log(`  computer seats: ${s.computerSeats}`)
   console.log(`  whiteboards:    ${s.whiteboards}`)
+  console.log(`  doors:          ${s.doors}`)
   console.log(`  colliders:      ${s.colliders.wall} wall, ${s.colliders.furniture} furniture`)
   console.log(`  spawns:         ${s.spawns}`)
 

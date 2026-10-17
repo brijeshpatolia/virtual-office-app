@@ -1,5 +1,5 @@
 import { rectContains } from './geometry.ts'
-import type { ColliderKind, OfficeMap } from './types.ts'
+import type { Cell, ColliderKind, OfficeMap, Rect } from './types.ts'
 
 export interface Grid {
   cols: number
@@ -8,11 +8,6 @@ export interface Grid {
   cellHeight: number
   // Cells outside the grid count as blocked.
   blocked(col: number, row: number): boolean
-}
-
-export interface Cell {
-  col: number
-  row: number
 }
 
 type GridSource = Pick<OfficeMap, 'width' | 'height' | 'tileWidth' | 'tileHeight' | 'colliders'>
@@ -25,21 +20,31 @@ export function buildGrid(map: GridSource, kinds: readonly ColliderKind[]): Grid
   const cells = new Uint8Array(cols * rows)
   for (const { kind, rect } of map.colliders) {
     if (!kinds.includes(kind)) continue
-    const c0 = Math.max(0, Math.floor(rect.x / cellWidth))
-    const c1 = Math.min(cols - 1, Math.floor((rect.x + rect.w) / cellWidth))
-    const r0 = Math.max(0, Math.floor(rect.y / cellHeight))
-    const r1 = Math.min(rows - 1, Math.floor((rect.y + rect.h) / cellHeight))
-    for (let row = r0; row <= r1; row++) {
-      for (let col = c0; col <= c1; col++) {
-        if (rectContains(rect, (col + 0.5) * cellWidth, (row + 0.5) * cellHeight)) cells[row * cols + col] = 1
-      }
-    }
+    for (const { col, row } of cellsIn(map, rect)) cells[row * cols + col] = 1
   }
   const blocked = (col: number, row: number): boolean =>
     !Number.isInteger(col) || !Number.isInteger(row) || col < 0 || row < 0 || col >= cols || row >= rows
       ? true
       : cells[row * cols + col] === 1
   return { cols, rows, cellWidth, cellHeight, blocked }
+}
+
+type CellSource = Pick<OfficeMap, 'width' | 'height' | 'tileWidth' | 'tileHeight'>
+
+// The map cells whose centre lies in the rect.
+export function cellsIn(map: CellSource, rect: Rect): Cell[] {
+  const { tileWidth: w, tileHeight: h } = map
+  const c0 = Math.max(0, Math.floor(rect.x / w))
+  const c1 = Math.min(map.width - 1, Math.floor((rect.x + rect.w) / w))
+  const r0 = Math.max(0, Math.floor(rect.y / h))
+  const r1 = Math.min(map.height - 1, Math.floor((rect.y + rect.h) / h))
+  const out: Cell[] = []
+  for (let row = r0; row <= r1; row++) {
+    for (let col = c0; col <= c1; col++) {
+      if (rectContains(rect, (col + 0.5) * w, (row + 0.5) * h)) out.push({ col, row })
+    }
+  }
+  return out
 }
 
 export function cellAt(grid: Grid, x: number, y: number): Cell {

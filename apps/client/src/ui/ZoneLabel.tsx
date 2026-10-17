@@ -15,7 +15,7 @@ export function ZoneLabel() {
 
   if (zone === null) return null
   return (
-    <div data-testid="zone-label" title={`Zone type: ${zone.zoneType}`} style={pillStyle}>
+    <div data-testid="zone-label" style={pillStyle}>
       {`${zone.zoneId} · ${zone.mediaMode}`}
     </div>
   )

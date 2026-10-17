@@ -27,6 +27,7 @@ describe('validate-map CLI', () => {
     expect(out).toContain('seats:          2')
     expect(out).toContain('computer seats: 1')
     expect(out).toContain('whiteboards:    1')
+    expect(out).toContain('doors:          1')
     expect(out).toContain('colliders:      6 wall, 1 furniture')
     expect(out).toContain('spawns:         1')
     expect(out).toContain('No issues.')

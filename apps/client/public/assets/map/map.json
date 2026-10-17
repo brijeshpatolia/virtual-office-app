@@ -664,6 +664,16 @@
                  "point":true,
                  "properties":[
                         {
+                         "name":"computerCol",
+                         "type":"int",
+                         "value":9
+                        }, 
+                        {
+                         "name":"computerRow",
+                         "type":"int",
+                         "value":18
+                        }, 
+                        {
                          "name":"facing",
                          "type":"string",
                          "value":"right"
@@ -696,6 +706,16 @@
                  "name":"m5",
                  "point":true,
                  "properties":[
+                        {
+                         "name":"computerCol",
+                         "type":"int",
+                         "value":15
+                        }, 
+                        {
+                         "name":"computerRow",
+                         "type":"int",
+                         "value":18
+                        }, 
                         {
                          "name":"facing",
                          "type":"string",
@@ -829,6 +849,16 @@
                  "point":true,
                  "properties":[
                         {
+                         "name":"computerCol",
+                         "type":"int",
+                         "value":31
+                        }, 
+                        {
+                         "name":"computerRow",
+                         "type":"int",
+                         "value":16
+                        }, 
+                        {
                          "name":"facing",
                          "type":"string",
                          "value":"up"
@@ -861,6 +891,16 @@
                  "name":"d2",
                  "point":true,
                  "properties":[
+                        {
+                         "name":"computerCol",
+                         "type":"int",
+                         "value":34
+                        }, 
+                        {
+                         "name":"computerRow",
+                         "type":"int",
+                         "value":16
+                        }, 
                         {
                          "name":"facing",
                          "type":"string",
@@ -895,6 +935,16 @@
                  "point":true,
                  "properties":[
                         {
+                         "name":"computerCol",
+                         "type":"int",
+                         "value":37
+                        }, 
+                        {
+                         "name":"computerRow",
+                         "type":"int",
+                         "value":16
+                        }, 
+                        {
                          "name":"facing",
                          "type":"string",
                          "value":"up"
@@ -927,6 +977,16 @@
                  "name":"d4",
                  "point":true,
                  "properties":[
+                        {
+                         "name":"computerCol",
+                         "type":"int",
+                         "value":31
+                        }, 
+                        {
+                         "name":"computerRow",
+                         "type":"int",
+                         "value":22
+                        }, 
                         {
                          "name":"facing",
                          "type":"string",
@@ -961,6 +1021,16 @@
                  "point":true,
                  "properties":[
                         {
+                         "name":"computerCol",
+                         "type":"int",
+                         "value":34
+                        }, 
+                        {
+                         "name":"computerRow",
+                         "type":"int",
+                         "value":22
+                        }, 
+                        {
                          "name":"facing",
                          "type":"string",
                          "value":"down"
@@ -993,6 +1063,16 @@
                  "name":"d6",
                  "point":true,
                  "properties":[
+                        {
+                         "name":"computerCol",
+                         "type":"int",
+                         "value":37
+                        }, 
+                        {
+                         "name":"computerRow",
+                         "type":"int",
+                         "value":22
+                        }, 
                         {
                          "name":"facing",
                          "type":"string",
@@ -1027,6 +1107,16 @@
                  "point":true,
                  "properties":[
                         {
+                         "name":"computerCol",
+                         "type":"int",
+                         "value":31
+                        }, 
+                        {
+                         "name":"computerRow",
+                         "type":"int",
+                         "value":24
+                        }, 
+                        {
                          "name":"facing",
                          "type":"string",
                          "value":"up"
@@ -1060,6 +1150,16 @@
                  "point":true,
                  "properties":[
                         {
+                         "name":"computerCol",
+                         "type":"int",
+                         "value":37
+                        }, 
+                        {
+                         "name":"computerRow",
+                         "type":"int",
+                         "value":24
+                        }, 
+                        {
                          "name":"facing",
                          "type":"string",
                          "value":"up"
@@ -1092,6 +1192,16 @@
                  "name":"p1",
                  "point":true,
                  "properties":[
+                        {
+                         "name":"computerCol",
+                         "type":"int",
+                         "value":29
+                        }, 
+                        {
+                         "name":"computerRow",
+                         "type":"int",
+                         "value":5
+                        }, 
                         {
                          "name":"facing",
                          "type":"string",
@@ -1229,6 +1339,57 @@
                  "width":128,
                  "x":640,
                  "y":864
+                }, 
+                {
+                 "height":64,
+                 "id":66,
+                 "name":"door-private-office",
+                 "properties":[
+                        {
+                         "name":"doorId",
+                         "type":"string",
+                         "value":"door-private-office"
+                        }],
+                 "rotation":0,
+                 "type":"door",
+                 "visible":true,
+                 "width":32,
+                 "x":672,
+                 "y":256
+                }, 
+                {
+                 "height":32,
+                 "id":67,
+                 "name":"door-open-plan",
+                 "properties":[
+                        {
+                         "name":"doorId",
+                         "type":"string",
+                         "value":"door-open-plan"
+                        }],
+                 "rotation":0,
+                 "type":"door",
+                 "visible":true,
+                 "width":32,
+                 "x":768,
+                 "y":384
+                }, 
+                {
+                 "height":64,
+                 "id":68,
+                 "name":"door-meeting-room",
+                 "properties":[
+                        {
+                         "name":"doorId",
+                         "type":"string",
+                         "value":"door-meeting-room"
+                        }],
+                 "rotation":0,
+                 "type":"door",
+                 "visible":true,
+                 "width":32,
+                 "x":352,
+                 "y":416
                 }],
          "opacity":1,
          "type":"objectgroup",
@@ -1872,7 +2033,7 @@
          "y":0
         }],
  "nextlayerid":15,
- "nextobjectid":66,
+ "nextobjectid":69,
  "orientation":"orthogonal",
  "properties":[
         {
@@ -1913,6 +2074,70 @@
          "spacing":0,
          "tilecount":848,
          "tileheight":32,
+         "tiles":[
+                {
+                 "id":206,
+                 "properties":[
+                        {
+                         "name":"computer",
+                         "type":"bool",
+                         "value":true
+                        }]
+                }, 
+                {
+                 "id":238,
+                 "properties":[
+                        {
+                         "name":"computer",
+                         "type":"bool",
+                         "value":true
+                        }]
+                }, 
+                {
+                 "id":253,
+                 "properties":[
+                        {
+                         "name":"computer",
+                         "type":"bool",
+                         "value":true
+                        }]
+                }, 
+                {
+                 "id":255,
+                 "properties":[
+                        {
+                         "name":"computer",
+                         "type":"bool",
+                         "value":true
+                        }]
+                }, 
+                {
+                 "id":269,
+                 "properties":[
+                        {
+                         "name":"computer",
+                         "type":"bool",
+                         "value":true
+                        }]
+                }, 
+                {
+                 "id":271,
+                 "properties":[
+                        {
+                         "name":"computer",
+                         "type":"bool",
+                         "value":true
+                        }]
+                }, 
+                {
+                 "id":494,
+                 "properties":[
+                        {
+                         "name":"computer",
+                         "type":"bool",
+                         "value":true
+                        }]
+                }],
          "tilewidth":32
         }, 
         {

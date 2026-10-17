@@ -18,8 +18,9 @@ export function PhaserGame() {
     const game = new Phaser.Game(createGameConfig(parent))
 
     return () => {
-      // destroy() only runs on Phaser's next frame. Detach the canvas now so a
-      // StrictMode or HMR remount never shows two canvases at once.
+      // destroy() only runs on Phaser's next frame. Detach the canvas now so the
+      // StrictMode double mount never shows two canvases at once. Edits to Phaser
+      // code reload the page (see config.ts) instead of remounting this component.
       game.canvas.remove()
       game.destroy(true)
     }

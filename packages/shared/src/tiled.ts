@@ -59,10 +59,17 @@ const RawLayerSchema = z.discriminatedUnion(
   { error: 'layer type must be tilelayer, objectgroup, imagelayer or group' },
 )
 
-const RawTilesetSchema = z.object({
+const RawTileSchema = z.object({
+  id: int.nonnegative(),
+  properties: z.array(RawPropertySchema).optional(),
+})
+
+export const RawTilesetSchema = z.object({
   firstgid: int.positive(),
   name: z.string().optional(),
   source: z.string().optional(),
+  image: z.string().optional(),
+  tiles: z.array(RawTileSchema).optional(),
 })
 
 export const RawMapSchema = z.object({
@@ -82,6 +89,7 @@ export type RawObject = z.infer<typeof RawObjectSchema>
 export type RawLayer = z.infer<typeof RawLayerSchema>
 export type RawTileLayer = z.infer<typeof RawTileLayerSchema>
 export type RawObjectGroup = z.infer<typeof RawObjectGroupSchema>
+export type RawTileset = z.infer<typeof RawTilesetSchema>
 export type RawMap = z.infer<typeof RawMapSchema>
 
 // Turns ['layers', 3, 'objects', 1, 'x'] into 'layer "Seats" > object id 9 > x'.

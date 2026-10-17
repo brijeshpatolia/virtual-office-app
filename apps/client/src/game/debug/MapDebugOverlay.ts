@@ -18,6 +18,7 @@ const COLOR = {
   computerSeat: 0x00e5ff,
   whiteboard: 0xf06292,
   signage: 0xb388ff,
+  door: 0xffffff,
   stairs: 0xbcaaa4,
   spawn: 0x76ff03,
   outline: 0x000000,
@@ -34,7 +35,7 @@ const SEAT_RADIUS = 7
 
 const css = (color: number): string => `#${color.toString(16).padStart(6, '0')}`
 
-// Zones, seats, interactables, colliders and the spawn, drawn over the map at DEPTH.debug. Hidden at first.
+// Zones, seats, interactables (doors too), colliders and the spawn, drawn over the map at DEPTH.debug. Hidden at first.
 export class MapDebugOverlay {
   private readonly layer: Phaser.GameObjects.Layer
 
@@ -66,6 +67,11 @@ export class MapDebugOverlay {
     for (const slot of map.signage) {
       drawBox(g, slot.rect, COLOR.signage, 0.35, 2)
       label(slot.rect.x + 2, slot.rect.y + slot.rect.h - 16, slot.id, COLOR.signage)
+    }
+    for (const door of map.doors) {
+      drawBox(g, door.rect, COLOR.door, 0.45, 2)
+      // Above the door: the zone labels sit at the top-left of the rooms below.
+      label(door.rect.x + door.rect.w / 2, door.rect.y - 16, door.id, COLOR.door, 0.5)
     }
     for (const stairs of map.stairs) {
       drawBox(g, stairs.rect, COLOR.stairs, 0.35, 2)

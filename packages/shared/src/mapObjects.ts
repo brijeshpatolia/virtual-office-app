@@ -5,6 +5,7 @@ import {
   FACINGS,
   MEDIA_MODES,
   ZONE_TYPES,
+  type Cell,
   type OfficeMap,
   type Point,
   type Rect,
@@ -12,15 +13,15 @@ import {
 
 export type MapObjects = Pick<
   OfficeMap,
-  'zones' | 'seats' | 'whiteboards' | 'signage' | 'stairs' | 'colliders' | 'spawns'
+  'zones' | 'seats' | 'whiteboards' | 'signage' | 'doors' | 'stairs' | 'colliders' | 'spawns'
 >
 
-export type ObjectClass = 'zone' | 'seat' | 'whiteboard' | 'signage' | 'stairs' | 'collider' | 'spawn'
+export type ObjectClass = 'zone' | 'seat' | 'whiteboard' | 'signage' | 'door' | 'stairs' | 'collider' | 'spawn'
 
 export const LAYER_CLASSES = {
   Zones: ['zone'],
   Seats: ['seat'],
-  Interactables: ['whiteboard', 'signage', 'stairs'],
+  Interactables: ['whiteboard', 'signage', 'door', 'stairs'],
   Collision: ['collider'],
   Spawn: ['spawn'],
 } as const satisfies Record<string, readonly ObjectClass[]>
@@ -33,7 +34,7 @@ interface Source {
 }
 
 export function emptyMapObjects(): MapObjects {
-  return { zones: [], seats: [], whiteboards: [], signage: [], stairs: [], colliders: [], spawns: [] }
+  return { zones: [], seats: [], whiteboards: [], signage: [], doors: [], stairs: [], colliders: [], spawns: [] }
 }
 
 export function readObjectLayer(
@@ -94,6 +95,14 @@ function pointOf({ object: o, where, issues }: Source): Point {
   return { x: o.x, y: o.y }
 }
 
+function computerCell({ props, where, issues }: Source): Cell | null {
+  const col = props.optionalInt('computerCol')
+  const row = props.optionalInt('computerRow')
+  if (col !== undefined && row !== undefined) return { col, row }
+  if (col !== undefined || row !== undefined) issues.push(`${where}: set both computerCol and computerRow, or neither`)
+  return null
+}
+
 function addObject(cls: ObjectClass, src: Source, out: MapObjects): void {
   const { props } = src
   switch (cls) {
@@ -120,6 +129,7 @@ function addObject(cls: ObjectClass, src: Source, out: MapObjects): void {
         y,
         facing: props.oneOf('facing', FACINGS),
         hasComputer: props.bool('hasComputer'),
+        computer: computerCell(src),
       })
       return
     }
@@ -128,6 +138,9 @@ function addObject(cls: ObjectClass, src: Source, out: MapObjects): void {
       return
     case 'signage':
       out.signage.push({ id: props.id('slotId'), rect: rectOf(src) })
+      return
+    case 'door':
+      out.doors.push({ id: props.id('doorId'), rect: rectOf(src) })
       return
     case 'stairs':
       out.stairs.push({ rect: rectOf(src), targetFloor: props.string('targetFloor') })
