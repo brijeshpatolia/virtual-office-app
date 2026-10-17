@@ -34,7 +34,12 @@ export default defineConfig({
   projects: [
     {
       name: 'chromium',
-      use: { ...devices['Desktop Chrome'], launchOptions: { executablePath: process.env.PW_CHROMIUM_PATH || undefined } },
+      use: {
+        ...devices['Desktop Chrome'],
+        // Chromium's headless shell (the CI default) denies clipboard writes unless the context grants them.
+        permissions: ['clipboard-write'],
+        launchOptions: { executablePath: process.env.PW_CHROMIUM_PATH || undefined },
+      },
     },
   ],
   webServer: [
