@@ -151,11 +151,34 @@ describe('OfficeRoom sessions', () => {
     expect(a.closeCode).toBe(ROOM_CLOSE.removed)
     await waitFor(() => !b.room.state.players.has(a.sessionId), 'ben to see ann leave')
     expect(usersIn(b)).toEqual(['u-ben'])
+    // Ben's page is told his new role.
+    await waitFor(() => b.received(MSG.roleChanged).length === 1, 'role:changed')
+    expect(b.received(MSG.roleChanged)).toEqual([{ role: 'guest' }])
     // Ben is a guest now: the hallway is closed to him.
     await b.walk({ x: 752, y: 400 })
     expect(await b.moveTo({ x: 752, y: 440 })).toMatchObject({ reason: 'guest' })
     expect(b.closeCode).toBeNull()
     await b.leave()
+  })
+
+  it('tells a reconnected client the role change it missed while the connection was down', async () => {
+    const officeId = newOffice()
+    const a = await rs.join(ann, officeId)
+    a.room.reconnection.minUptime = 0
+    a.room.reconnection.minDelay = 1000
+    a.room.reconnection.maxDelay = 1000
+    const reconnected = new Promise<void>((resolve) => a.room.onReconnect(() => resolve()))
+    dropConnection(a)
+    await sleep(100)
+    rs.grant(ann, officeId, 'admin')
+    rs.clock.advance(ACCESS_RECHECK_MS)
+    await sleep(300)
+    expect(a.received(MSG.roleChanged)).toEqual([])
+    await reconnected
+    await waitFor(() => a.received(MSG.roleChanged).length === 1, 'role:changed after the reconnect')
+    expect(a.received(MSG.roleChanged)).toEqual([{ role: 'admin' }])
+    rs.grant(ann, officeId, 'member')
+    await a.leave()
   })
 
   it('sends a member who becomes a guest inside a members-only zone back to the door', async () => {

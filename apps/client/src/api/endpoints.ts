@@ -1,16 +1,22 @@
 import {
   AcceptInviteLinkResponseSchema,
   API,
+  ChatHistoryResponseSchema,
+  ChatUnreadResponseSchema,
   ClientConfigResponseSchema,
   CreateCompanyResponseSchema,
   CreateInviteLinkResponseSchema,
   InviteLinkInfoResponseSchema,
   ListInviteLinksResponseSchema,
+  MembersResponseSchema,
   MeResponseSchema,
   OfficeResponseSchema,
   RevokeInviteLinkResponseSchema,
   RtTokenResponseSchema,
+  UserPrefsResponseSchema,
   type AcceptInviteLinkResponse,
+  type ChatHistoryResponse,
+  type ChatUnreadResponse,
   type ClientConfigResponse,
   type CreateCompanyRequest,
   type CreateCompanyResponse,
@@ -18,10 +24,13 @@ import {
   type CreateInviteLinkResponse,
   type InviteLinkInfoResponse,
   type ListInviteLinksResponse,
+  type MembersResponse,
   type MeResponse,
   type OfficeResponse,
   type RevokeInviteLinkResponse,
   type RtTokenResponse,
+  type UpdatePrefsRequest,
+  type UserPrefsResponse,
 } from '@vo/shared'
 import { apiRequest, isApiError } from './http.ts'
 
@@ -56,6 +65,20 @@ export const acceptInviteLink = (token: string): Promise<AcceptInviteLinkRespons
   apiRequest(API.acceptInviteLink(token), AcceptInviteLinkResponseSchema, { method: 'POST' })
 
 export const fetchRtToken = (officeId: string): Promise<RtTokenResponse> => apiRequest(API.rtToken(officeId), RtTokenResponseSchema)
+
+export const fetchChatHistory = (officeId: string, before?: string): Promise<ChatHistoryResponse> =>
+  apiRequest(API.chat(officeId, before === undefined ? {} : { before }), ChatHistoryResponseSchema)
+
+export const fetchChatUnread = (officeId: string): Promise<ChatUnreadResponse> =>
+  apiRequest(API.chatUnread(officeId), ChatUnreadResponseSchema)
+
+// 403 forbidden for guests.
+export const fetchMembers = (officeId: string): Promise<MembersResponse> => apiRequest(API.members(officeId), MembersResponseSchema)
+
+export const fetchPrefs = (orgId: string): Promise<UserPrefsResponse> => apiRequest(API.prefs(orgId), UserPrefsResponseSchema)
+
+export const updatePrefs = (orgId: string, body: UpdatePrefsRequest): Promise<UserPrefsResponse> =>
+  apiRequest(API.prefs(orgId), UserPrefsResponseSchema, { method: 'PUT', body })
 
 // Sign-in options. Any failure hides the Google button.
 export async function fetchSignInConfig(): Promise<ClientConfigResponse> {

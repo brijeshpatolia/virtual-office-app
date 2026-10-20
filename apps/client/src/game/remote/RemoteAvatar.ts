@@ -1,9 +1,11 @@
-import type Phaser from 'phaser'
+import Phaser from 'phaser'
 import type { PlayerState } from '@vo/shared'
 import { AvatarView, type AvatarPose } from '../avatar/AvatarView.ts'
+import { EventBus } from '../EventBus.ts'
 import { InterpolationBuffer } from './interpolation.ts'
 
-// Another player: drawn INTERPOLATION_DELAY_MS in the past between the positions the server sent.
+// Another player: drawn INTERPOLATION_DELAY_MS in the past between the positions the server sent. A click on it
+// opens the profile card.
 export class RemoteAvatar {
   private readonly view: AvatarView
   private readonly buffer = new InterpolationBuffer()
@@ -12,6 +14,9 @@ export class RemoteAvatar {
   constructor(scene: Phaser.Scene, state: PlayerState, now: number) {
     this.state = state
     this.view = new AvatarView(scene, state, state.dir, (key, frame) => scene.add.sprite(state.x, state.y, key, frame))
+    this.view.sprite
+      .setInteractive({ useHandCursor: true })
+      .on(Phaser.Input.Events.GAMEOBJECT_POINTER_UP, () => EventBus.emit('profile-open', state.userId))
     this.onServerChange(now)
   }
 

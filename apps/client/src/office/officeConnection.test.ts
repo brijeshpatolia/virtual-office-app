@@ -28,6 +28,7 @@ describe('leaveReason', () => {
     expect(leaveReason(ROOM_CLOSE.replaced)).toBe('replaced')
     expect(leaveReason(ROOM_CLOSE.removed)).toBe('removed')
     expect(leaveReason(ROOM_CLOSE.roleChanged)).toBe('role_changed')
+    expect(leaveReason(ROOM_CLOSE.kicked)).toBe('kicked')
     expect(leaveReason(4003)).toBe('lost')
     expect(leaveReason(1006)).toBe('lost')
   })
@@ -62,6 +63,18 @@ describe('OfficeConnection', () => {
     expect(connection.getState()).toMatchObject({ kind: 'connected', reconnecting: false })
     fake.handlers.leave.forEach((h) => h(ROOM_CLOSE.replaced))
     expect(connection.getState()).toMatchObject({ kind: 'closed', reason: 'replaced' })
+  })
+
+  it('shows a kick and does not join again by itself', async () => {
+    const fake = fakeHandle()
+    let joins = 0
+    const connection = new OfficeConnection('o1', async () => 'tok', async () => (joins++, fake.handle))
+    connection.connect()
+    await tick()
+    fake.handlers.leave.forEach((h) => h(ROOM_CLOSE.kicked))
+    await tick()
+    expect(connection.getState()).toMatchObject({ kind: 'closed', reason: 'kicked' })
+    expect(joins).toBe(1)
   })
 
   it('reports a refused join as denied and other failures as errors', async () => {

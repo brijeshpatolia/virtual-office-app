@@ -1,5 +1,5 @@
 import { useEffect, useState, type CSSProperties } from 'react'
-import { EventBus } from '../game/EventBus.ts'
+import { EventBus, type ToastKind } from '../game/EventBus.ts'
 import { pillStyle } from './hudStyles.ts'
 
 const SHOW_MS = 2600
@@ -18,16 +18,17 @@ const stackStyle: CSSProperties = {
   fontFamily: 'system-ui, -apple-system, "Segoe UI", sans-serif',
 }
 
-// Short messages from the game ('Entered Meeting room (group call later)'), each shown for a moment.
+// Short messages from the game ('Entered Meeting room (group call later)') and the office ('Ann waved at you'),
+// each shown for a moment.
 export function Toasts() {
-  const [toasts, setToasts] = useState<Array<{ id: number; text: string }>>([])
+  const [toasts, setToasts] = useState<Array<{ id: number; text: string; kind: ToastKind }>>([])
 
   useEffect(() => {
     let nextId = 0
     const timers = new Set<number>()
-    const add = (text: string): void => {
+    const add = (text: string, kind: ToastKind = 'info'): void => {
       const id = ++nextId
-      setToasts((list) => [...list.slice(1 - MAX), { id, text }])
+      setToasts((list) => [...list.slice(1 - MAX), { id, text, kind }])
       const timer = window.setTimeout(() => {
         timers.delete(timer)
         setToasts((list) => list.filter((t) => t.id !== id))
@@ -44,7 +45,7 @@ export function Toasts() {
   return (
     <div style={stackStyle} aria-live="polite">
       {toasts.map((toast) => (
-        <div key={toast.id} data-testid="toast" style={pillStyle}>
+        <div key={toast.id} data-testid={toast.kind === 'wave' ? 'wave-toast' : 'toast'} style={pillStyle}>
           {toast.text}
         </div>
       ))}
