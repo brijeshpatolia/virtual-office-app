@@ -154,6 +154,8 @@ class MockOffice {
       zoneId: '',
       seatId: '',
       status: 'available',
+      chosenStatus: 'available',
+      statusText: '',
     }
     this.players.set(sessionId, player)
     const tracker = new ZoneTracker(this.map, { dwellMs: 0 })

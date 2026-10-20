@@ -7,6 +7,7 @@ import { join } from 'node:path'
 import { createAuth, type Auth } from '../../src/auth/auth.ts'
 import { createGetOfficeAccess, type GetOfficeAccess } from '../../src/auth/membership.ts'
 import { createVerifyAccessToken, type VerifyAccessToken } from '../../src/auth/verifyAccessToken.ts'
+import { createServices } from '../../src/chat/services.ts'
 import { loadEnv, type Env } from '../../src/env.ts'
 import { createMailer } from '../../src/mail/mailer.ts'
 import { configureApi, limitRequestBodies, listeningPort } from '../../src/server.ts'
@@ -44,7 +45,7 @@ export async function startTestApi(vars: Record<string, string> = {}): Promise<T
   const verifyAccessToken = createVerifyAccessToken({ env, auth })
 
   const app = express()
-  configureApi(app, { env, db: database.db, auth, mailer, getOfficeAccess })
+  configureApi(app, { env, db: database.db, auth, mailer, getOfficeAccess, services: createServices(database.db) })
   const httpServer = createServer(app)
   limitRequestBodies(httpServer)
   await new Promise<void>((resolve) => httpServer.listen(0, '127.0.0.1', resolve))

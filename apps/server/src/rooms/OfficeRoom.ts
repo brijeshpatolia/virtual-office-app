@@ -52,6 +52,11 @@ import {
 } from '@vo/shared'
 import type { GetOfficeAccess } from '../auth/membership.ts'
 import type { VerifyAccessToken } from '../auth/verifyAccessToken.ts'
+import type { Services } from '../chat/services.ts'
+import { adminHandlers } from './handlers/admin.ts'
+import { chatHandlers } from './handlers/chat.ts'
+import type { HandlerContext } from './handlers/context.ts'
+import { presenceHandlers } from './handlers/presence.ts'
 import { OfficeState, Player, Seat } from './state.ts'
 import { DEFAULT_ROOM_SETTINGS, type OfficeRoomSettings, type RoomStore } from './store.ts'
 
@@ -62,6 +67,8 @@ export interface OfficeRoomDeps {
   // Office settings and presence_sessions rows (createRoomStore). Without it the room uses the default settings
   // and records no presence.
   store?: RoomStore
+  // Chat, prefs and moderation (P2). Without them those requests are rejected with 'invalid'.
+  services?: Services
   // Clock in ms; tests pass a fake one.
   now?: () => number
 }
@@ -197,6 +204,9 @@ export function createOfficeRoom(deps: OfficeRoomDeps) {
       this.onMessage(MSG.activity, (client, message) => this.#activity(client, message))
       this.onMessage(MSG.sit, (client, message, ctx) => this.#sit(client, message, ctx))
       this.onMessage(MSG.stand, (client, _message, ctx) => this.#stand(client, ctx))
+      const context = this.#handlerContext()
+      const handlers = { ...chatHandlers(context), ...presenceHandlers(context), ...adminHandlers(context) }
+      for (const [type, handler] of Object.entries(handlers)) this.onMessage(type, handler)
       this.clock.setInterval(() => this.#tick(), TICK_MS)
     }
 
@@ -271,6 +281,18 @@ export function createOfficeRoom(deps: OfficeRoomDeps) {
 
     override onUncaughtException(error: RoomException, methodName: RoomMethodName) {
       console.error(`OfficeRoom ${this.#officeId}: ${methodName} failed:`, error.cause ?? error)
+    }
+
+    #handlerContext(): HandlerContext {
+      return {
+        services: deps.services,
+        userOf: (client) => {
+          const session = this.#sessions.get(client.sessionId)
+          const auth = client.auth
+          return session === undefined || auth === undefined ? null : { ...auth, role: session.role }
+        },
+        now,
+      }
     }
 
     #loadSettings(): Promise<OfficeRoomSettings> {

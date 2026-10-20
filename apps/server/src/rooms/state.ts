@@ -1,5 +1,5 @@
 import { schema, t, type SchemaType } from '@colyseus/schema'
-import type { Facing, PlayerState, PlayerStatus, SeatState } from '@vo/shared'
+import type { ChosenStatus, Facing, PlayerState, PlayerStatus, SeatState } from '@vo/shared'
 
 // Schema 5 builder syntax (no decorators). Fields match PlayerState / SeatState in @vo/shared.
 export const Player = schema(
@@ -14,6 +14,8 @@ export const Player = schema(
     zoneId: t.string().default(''),
     seatId: t.string().default(''),
     status: t.string<PlayerStatus>().default('available'),
+    chosenStatus: t.string<ChosenStatus>().default('available'),
+    statusText: t.string().default(''),
   },
   'Player',
 )

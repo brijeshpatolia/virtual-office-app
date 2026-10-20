@@ -12,7 +12,7 @@ export interface AvatarLook {
   status: PlayerStatus
 }
 
-const STATUS_COLOR: Record<PlayerStatus, number> = { available: 0x3ccf6e, away: 0xf2a33a }
+const STATUS_COLOR: Record<PlayerStatus, number> = { available: 0x3ccf6e, busy: 0xe5484d, dnd: 0x8e1c1c, away: 0xf2a33a }
 // The name tag sits just above the hair (frame row 7).
 const TAG_Y = -AVATAR_FRAME.height / 2 + 5
 const TAG_STYLE: Phaser.Types.GameObjects.Text.TextStyle = {

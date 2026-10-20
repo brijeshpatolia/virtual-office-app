@@ -253,8 +253,8 @@ The client reads two more variables. `VITE_SERVER_URL` (unset in development) is
 
 `packages/db` uses Drizzle. Without `DATABASE_URL` it opens PGlite in `PGLITE_DIR`; with it, Postgres (node-postgres).
 The server applies the migrations in `packages/db/drizzle` when it starts (on Postgres under a lock, so two servers can start together):
-`0000_init` (the Better Auth tables, offices, invite links, presence sessions and the audit log), `0001_member_unique` (one membership per user and company)
-and `0002_member_removals` (members an owner or admin removed).
+`0000_init` (the Better Auth tables, offices, invite links, presence sessions and the audit log), `0001_member_unique` (one membership per user and company),
+`0002_member_removals` (members an owner or admin removed) and `0003_chat_presence` (chat messages, mentions, read state, chat mutes and user prefs for P2).
 
 After you change a table in `packages/db/src/schema`, write a migration with a name:
 

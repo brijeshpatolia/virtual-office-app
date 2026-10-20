@@ -1,4 +1,6 @@
 import { z } from 'zod'
+import { CHAT_PAGE_SIZE, ChatMessageSchema, MessageIdSchema } from './chat.ts'
+import { MAX_BLOCKED_USERS, StatusTextSchema } from './presence.ts'
 
 // HTTP API of the office server. Every route answers JSON. Errors: ApiError with the status in API_ERRORS.
 // Auth: the Better Auth session cookie (httpOnly), sent with credentials: 'include'. Requests other than GET, HEAD
@@ -27,6 +29,16 @@ export const API = {
     `/api/offices/${encodeURIComponent(officeId)}/invite-links/${encodeURIComponent(linkId)}`,
   acceptInviteLink: (token: string) => `/api/invite-links/${encodeURIComponent(token)}/accept`,
   rtToken: (officeId: string) => `/api/rt-token?officeId=${encodeURIComponent(officeId)}`,
+  chat: (officeId: string, query: { before?: string; limit?: number } = {}) => {
+    const params = new URLSearchParams()
+    if (query.before !== undefined) params.set('before', query.before)
+    if (query.limit !== undefined) params.set('limit', String(query.limit))
+    const search = params.toString()
+    return `/api/offices/${encodeURIComponent(officeId)}/chat${search === '' ? '' : `?${search}`}`
+  },
+  chatUnread: (officeId: string) => `/api/offices/${encodeURIComponent(officeId)}/chat/unread`,
+  members: (officeId: string) => `/api/offices/${encodeURIComponent(officeId)}/members`,
+  prefs: (orgId: string) => `/api/me/prefs?orgId=${encodeURIComponent(orgId)}`,
 } as const
 
 // Client pages that the server links to (invite links, invitation emails).
@@ -159,3 +171,56 @@ export type OfficeResponse = z.infer<typeof OfficeResponseSchema>
 export const RtTokenQuerySchema = z.object({ officeId: z.string().min(1).max(64) })
 export const RtTokenResponseSchema = z.object({ token: z.string(), expiresAt: isoDate })
 export type RtTokenResponse = z.infer<typeof RtTokenResponseSchema>
+
+// GET /api/offices/:officeId/chat?before=&limit= (members of the office's company, guests included). Keyset paging,
+// newest first: the messages with id < before (all when before is absent), at most limit (1 to CHAT_PAGE_SIZE,
+// default CHAT_PAGE_SIZE). nextBefore: pass it as before for the next older page; null when there is none.
+// A guest gets only the messages created at or after they joined the company (member.createdAt). Deleted messages
+// come as tombstones (body '', deletedAt set). Messages of people the caller blocked are included; the client
+// hides them.
+export const ChatHistoryQuerySchema = z.object({
+  before: MessageIdSchema.optional(),
+  limit: z.coerce.number().int().min(1).max(CHAT_PAGE_SIZE).default(CHAT_PAGE_SIZE),
+})
+export type ChatHistoryQuery = z.infer<typeof ChatHistoryQuerySchema>
+export const ChatHistoryResponseSchema = z.object({ messages: z.array(ChatMessageSchema), nextBefore: MessageIdSchema.nullable() })
+export type ChatHistoryResponse = z.infer<typeof ChatHistoryResponseSchema>
+
+// GET /api/offices/:officeId/chat/unread (members, guests included). The messages after lastReadId (all when
+// null) that the caller can see, are not their own, not deleted and not from someone they blocked; each count
+// stops at UNREAD_COUNT_LIMIT. mentions: of those, the ones that mention the caller or everyone.
+export const ChatUnreadResponseSchema = z.object({
+  count: z.number().int().nonnegative(),
+  mentions: z.number().int().nonnegative(),
+  lastReadId: MessageIdSchema.nullable(),
+})
+export type ChatUnreadResponse = z.infer<typeof ChatUnreadResponseSchema>
+
+// GET /api/offices/:officeId/members (owners, admins and members; 403 forbidden for guests, who see only the people
+// in the room). Every member of the office's company, oldest membership first. Online and status come from the
+// room state (players with the same userId).
+export const MemberSummarySchema = z.object({ userId: z.string(), name: z.string(), role: OrgRoleSchema, joinedAt: isoDate })
+export type MemberSummary = z.infer<typeof MemberSummarySchema>
+export const MembersResponseSchema = z.object({ members: z.array(MemberSummarySchema) })
+export type MembersResponse = z.infer<typeof MembersResponseSchema>
+
+// GET and PUT /api/me/prefs?orgId= (members of that company, guests included; 404 not_found otherwise). The
+// caller's settings in one company; defaults when nothing is stored. PUT changes only the fields it names and
+// answers the result. blockedUserIds replaces the whole list (ids of current members, never the caller).
+// The office room picks up a change at once (status text in the state, blocks for waves and mentions).
+export const PrefsQuerySchema = z.object({ orgId: z.string().min(1).max(64) })
+export const UserPrefsSchema = z.object({
+  statusText: z.string(),
+  blockedUserIds: z.array(z.string()),
+  // Browser notifications for mentions while the tab is hidden (never while on DND).
+  notifyMentions: z.boolean(),
+})
+export type UserPrefs = z.infer<typeof UserPrefsSchema>
+export const UserPrefsResponseSchema = UserPrefsSchema.extend({ orgId: z.string() })
+export type UserPrefsResponse = z.infer<typeof UserPrefsResponseSchema>
+export const UpdatePrefsRequestSchema = z.object({
+  statusText: StatusTextSchema.optional(),
+  blockedUserIds: z.array(z.string().min(1).max(64)).max(MAX_BLOCKED_USERS).optional(),
+  notifyMentions: z.boolean().optional(),
+})
+export type UpdatePrefsRequest = z.infer<typeof UpdatePrefsRequestSchema>

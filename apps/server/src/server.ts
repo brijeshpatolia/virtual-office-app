@@ -9,6 +9,7 @@ import { createServer, type IncomingMessage, type Server as HttpServer, type Ser
 import { createAuth } from './auth/auth.ts'
 import { createGetOfficeAccess } from './auth/membership.ts'
 import { createVerifyAccessToken } from './auth/verifyAccessToken.ts'
+import { createServices } from './chat/services.ts'
 import type { Env } from './env.ts'
 import { registerRoutes, type RouteDeps } from './http/routes.ts'
 import { createMailer } from './mail/mailer.ts'
@@ -28,13 +29,14 @@ export async function startServer(env: Env): Promise<RunningServer> {
   const auth = createAuth({ env, db: database.db, mailer })
   const getOfficeAccess = createGetOfficeAccess(database.db)
   const verifyAccessToken = createVerifyAccessToken({ env, auth })
+  const services = createServices(database.db)
 
   const httpServer = createServer()
   const realtime = createRealtimeServer({
     httpServer,
     clientOrigin: env.CLIENT_ORIGIN,
-    roomDeps: { officeMap, verifyAccessToken, getOfficeAccess, store: createRoomStore(database.db) },
-    configureExpress: (app) => configureApi(app, { env, db: database.db, auth, mailer, getOfficeAccess }),
+    roomDeps: { officeMap, verifyAccessToken, getOfficeAccess, store: createRoomStore(database.db), services },
+    configureExpress: (app) => configureApi(app, { env, db: database.db, auth, mailer, getOfficeAccess, services }),
   })
   await realtime.listen(env.PORT)
   // Colyseus binds its request handler in listen(); no request has been read before this line.
@@ -93,11 +95,15 @@ export interface RealtimeOptions {
   configureExpress?: (app: Application) => void
 }
 
+// Largest WebSocket message a client may send. The transport's default (4 KiB) is below a chat:send of
+// CHAT_MAX_LENGTH characters (up to 3 bytes each in UTF-8); a larger message closes the connection (1009).
+export const MAX_WS_MESSAGE_BYTES = 16 * 1024
+
 // Colyseus with the office room. Tests use it with fake room deps; call listen(0) and read listeningPort().
 export function createRealtimeServer(options: RealtimeOptions): ColyseusServer {
   hardenMatchmaker(options.clientOrigin)
   return defineServer({
-    transport: new WebSocketTransport({ server: options.httpServer }),
+    transport: new WebSocketTransport({ server: options.httpServer, maxPayload: MAX_WS_MESSAGE_BYTES }),
     greet: false,
     // index.ts handles SIGINT/SIGTERM and calls close().
     gracefullyShutdown: false,
