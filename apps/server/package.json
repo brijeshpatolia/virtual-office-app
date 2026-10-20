@@ -1,0 +1,26 @@
+{
+  "name": "@vo/server",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node --watch src/dev.ts",
+    "start": "node src/index.ts",
+    "build": "node scripts/smoke.ts",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@colyseus/core": "0.18.18",
+    "@colyseus/schema": "5.0.36",
+    "@colyseus/ws-transport": "0.18.4",
+    "@vo/db": "*",
+    "@vo/shared": "*",
+    "better-auth": "1.7.7",
+    "express": "5.3.0",
+    "jose": "6.2.12",
+    "zod": "4.6.6"
+  },
+  "devDependencies": {
+    "@colyseus/sdk": "0.18.5",
+    "@types/express": "5.0.6"
+  }
+}

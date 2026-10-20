@@ -9,7 +9,10 @@
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
+    "@colyseus/schema": "5.0.36",
+    "@colyseus/sdk": "0.18.5",
     "@vo/shared": "*",
+    "better-auth": "1.7.7",
     "phaser": "4.2.1",
     "react": "19.3.1",
     "react-dom": "19.3.1"

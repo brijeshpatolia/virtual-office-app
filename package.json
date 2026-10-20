@@ -12,18 +12,25 @@
     "npm": ">=11"
   },
   "scripts": {
-    "dev": "npm run dev --workspace @vo/client",
-    "build": "npm run build --workspace @vo/client",
+    "dev": "concurrently --kill-others-on-fail --names server,client --prefix-colors blue,green \"npm:dev:server\" \"npm:dev:client\"",
+    "dev:server": "npm run dev --workspace @vo/server",
+    "dev:client": "npm run dev --workspace @vo/client",
+    "start": "npm run start --workspace @vo/server",
+    "build": "npm run build --workspaces --if-present",
     "preview": "npm run preview --workspace @vo/client",
     "typecheck": "tsc -p tsconfig.json && npm run typecheck --workspaces --if-present",
     "lint": "eslint . --max-warnings 0",
     "test": "vitest run",
+    "e2e": "playwright test",
+    "db:generate": "npm run generate --workspace @vo/db",
     "validate:map": "node packages/shared/src/cli/validate-map.ts apps/client/public/assets/map/map.json",
     "check": "npm run typecheck && npm run lint && npm test && npm run validate:map && npm run build"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
+    "@playwright/test": "1.64.0",
     "@types/node": "24.19.2",
+    "concurrently": "10.0.6",
     "eslint": "10.12.0",
     "eslint-plugin-react-hooks": "7.1.1",
     "globals": "17.13.0",

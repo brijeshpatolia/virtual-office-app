@@ -1,0 +1,10 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "types": ["node"],
+    // drizzle-orm, pglite and better-auth ship .d.ts files that fail under TS 6 (missing optional peers such as
+    // gel, mysql2 and bun:sqlite, and TS2344/TS2536), so library checks are off here only.
+    "skipLibCheck": true
+  },
+  "include": ["src", "test", "drizzle.config.ts"]
+}

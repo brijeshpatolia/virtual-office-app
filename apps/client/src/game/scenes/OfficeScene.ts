@@ -1,13 +1,17 @@
 import Phaser from 'phaser'
 import { REQUIRED_TILE_LAYERS, type OfficeMap, type TilesetDef } from '@vo/shared'
+import type { OfficeLink } from '../../net/officeLink.ts'
 import { EventBus } from '../EventBus.ts'
-import { cameraBounds, fitZoom, type Size } from '../cameraFit.ts'
+import { cameraBounds, fitZoom, followZoom, type Size } from '../cameraFit.ts'
 import { isMapDebugKey, mapDebugFromQuery } from '../debug/debugFlag.ts'
 import { MapDebugOverlay } from '../debug/MapDebugOverlay.ts'
 import { TILE_LAYER_DEPTH, type TileLayerName } from '../depth.ts'
 import { createObstacles } from '../obstacles.ts'
 import { onSceneEnd } from '../onSceneEnd.ts'
+import type { MovementKeys } from '../player/LocalPlayer.ts'
 import { readOfficeMap } from '../readOfficeMap.ts'
+import { watchTyping } from '../typingFocus.ts'
+import { OfficeSession } from '../session/OfficeSession.ts'
 import { watchZoneHover } from '../zoneHover.ts'
 
 const MAP_KEY = 'office-map'
@@ -20,10 +24,13 @@ const tilesetUrl = (tileset: TilesetDef): string => `${MAP_DIR}/${tileset.image}
 export class OfficeScene extends Phaser.Scene {
   readonly layers = new Map<TileLayerName, Phaser.Tilemaps.TilemapLayer>()
   officeMap!: OfficeMap
-  // Static bodies for every Collision rect (walls and furniture). P1 adds the player collider against it.
+  // Static bodies for every Collision rect (walls and furniture); the own avatar collides with them.
   obstacles!: Phaser.Physics.Arcade.StaticGroup
   private debugOverlay!: MapDebugOverlay
   private mapSize: Size = { width: 0, height: 0 }
+  private keys!: MovementKeys
+  private session: OfficeSession | null = null
+  private followed: Phaser.GameObjects.Sprite | null = null
 
   constructor() {
     super('office')
@@ -57,7 +64,21 @@ export class OfficeScene extends Phaser.Scene {
     this.fitCamera(this.scale.gameSize)
 
     this.scale.on(Phaser.Scale.Events.RESIZE, this.fitCamera, this)
-    onSceneEnd(this, () => this.scale.off(Phaser.Scale.Events.RESIZE, this.fitCamera, this))
+    onSceneEnd(this, () => {
+      this.scale.off(Phaser.Scale.Events.RESIZE, this.fitCamera, this)
+      this.session?.destroy(true)
+      this.session = null
+      this.followed = null
+    })
+    this.keys = createMovementKeys(this)
+    // Keys typed into a form field (the invite role, a link to copy) do not walk the avatar.
+    const keyboard = this.input.keyboard
+    const stopWatching = watchTyping((typing) => {
+      if (!keyboard) return
+      keyboard.enabled = !typing
+      if (typing) keyboard.resetKeys()
+    })
+    onSceneEnd(this, stopWatching)
 
     this.debugOverlay = new MapDebugOverlay(this, this.officeMap)
     this.setMapDebug(mapDebugFromQuery(window.location.search))
@@ -69,18 +90,69 @@ export class OfficeScene extends Phaser.Scene {
     EventBus.emit('office-ready', this)
   }
 
+  override update(time: number) {
+    this.session?.update(time)
+  }
+
+  // Shows the connected office: the own avatar (camera follows it), the others, seats and presence.
+  attach(link: OfficeLink) {
+    this.detach()
+    this.session = new OfficeSession({
+      scene: this,
+      link,
+      map: this.officeMap,
+      obstacles: this.obstacles,
+      keys: this.keys,
+      follow: (sprite) => this.follow(sprite),
+    })
+  }
+
+  setReconnecting(reconnecting: boolean) {
+    this.session?.setReconnecting(reconnecting)
+  }
+
+  // Back to the empty map (left the room, connection lost).
+  detach() {
+    const session = this.session
+    this.session = null
+    session?.destroy()
+  }
+
   setMapDebug(visible: boolean) {
     this.debugOverlay.setVisible(visible)
     EventBus.emit('map-debug', visible)
   }
 
+  private follow(sprite: Phaser.GameObjects.Sprite | null) {
+    this.followed = sprite
+    if (!sprite) this.cameras.main.stopFollow()
+    this.fitCamera(this.scale.gameSize)
+  }
+
+  // Following the own avatar: integer zoom (2, or 1 on small screens). Without one: the whole map, centred.
   private fitCamera(view: Size) {
-    const zoom = fitZoom(view, this.mapSize)
+    const camera = this.cameras.main
+    const zoom = this.followed ? followZoom(view) : fitZoom(view, this.mapSize)
     const bounds = cameraBounds(view, this.mapSize, zoom)
-    this.cameras.main
-      .setZoom(zoom)
-      .setBounds(bounds.x, bounds.y, bounds.width, bounds.height)
-      .centerOn(this.mapSize.width / 2, this.mapSize.height / 2)
+    camera.setZoom(zoom).setBounds(bounds.x, bounds.y, bounds.width, bounds.height)
+    if (this.followed) camera.startFollow(this.followed, true)
+    else camera.centerOn(this.mapSize.width / 2, this.mapSize.height / 2)
+  }
+}
+
+// Arrow keys and WASD, E to sit or stand. No capture: the keys still reach the page (buttons, later the chat).
+// While a form field has focus the scene ignores the keyboard (watchTyping).
+function createMovementKeys(scene: Phaser.Scene): MovementKeys {
+  const keyboard = scene.input.keyboard
+  if (!keyboard) throw new Error('The office scene needs keyboard input')
+  const key = (code: number) => keyboard.addKey(code, false)
+  const K = Phaser.Input.Keyboard.KeyCodes
+  return {
+    up: [key(K.UP), key(K.W)],
+    down: [key(K.DOWN), key(K.S)],
+    left: [key(K.LEFT), key(K.A)],
+    right: [key(K.RIGHT), key(K.D)],
+    interact: key(K.E),
   }
 }
 
