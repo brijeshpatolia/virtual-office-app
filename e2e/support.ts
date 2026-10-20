@@ -1,7 +1,10 @@
-import { expect, type Page } from '@playwright/test'
+import { Client, type Room } from '@colyseus/sdk'
+import { expect, request, type APIRequestContext, type APIResponse, type Browser, type Page, type TestInfo } from '@playwright/test'
+import { randomUUID } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { e2eDataDir } from './env.ts'
+import { API, ChatSendResponseSchema, MSG, ROOM_NAME, type ChatMessage } from '../packages/shared/src/protocol/index.ts'
+import { CLIENT_ORIGIN, e2eDataDir, SERVER_PORT } from './env.ts'
 
 // window.__voOffice of the office page (apps/client/src/game/session/OfficeSession.ts).
 export interface OfficeSnapshot {
@@ -21,6 +24,8 @@ export interface OfficeSnapshot {
     rendered: { x: number; y: number; dir: string; pose: string } | null
   }>
   seats: Record<string, string>
+  // The chat bar's model: loaded message ids (oldest first), messages on their way, unread counts.
+  chat?: { ids: string[]; pending: number; unread: number; mentions: number }
 }
 
 declare global {
@@ -32,6 +37,35 @@ declare global {
 export interface Point {
   x: number
   y: number
+}
+
+export async function newPage(browser: Browser): Promise<Page> {
+  const context = await browser.newContext()
+  return context.newPage()
+}
+
+// PNGs in E2E_SCREENSHOT_DIR when set, else in the test's output folder; always attached to the report.
+export async function screenshot(page: Page, name: string, testInfo: TestInfo): Promise<void> {
+  const dir = process.env.E2E_SCREENSHOT_DIR
+  const path = dir ? `${dir}/${name}.png` : testInfo.outputPath(`${name}.png`)
+  await page.screenshot({ path })
+  await testInfo.attach(name, { path, contentType: 'image/png' })
+}
+
+export function toast(page: Page, text: string) {
+  return page.getByTestId('toast').filter({ hasText: text })
+}
+
+// Positions travel as float32.
+export function near(value: number | undefined, expected: number): boolean {
+  return value !== undefined && Math.abs(value - expected) < 0.5
+}
+
+// walkTo that must get all the way.
+export async function arrive(page: Page, target: Point): Promise<void> {
+  const at = await walkTo(page, target.x, target.y)
+  const message = `at (${at.x}, ${at.y}), wanted (${target.x}, ${target.y}): ${JSON.stringify(await snapshot(page))}`
+  expect(near(at.x, target.x) && near(at.y, target.y), message).toBe(true)
 }
 
 // The newest sign-in code mailed to `email`, from the dev mailer's log ({to, subject, text, at} per line).
@@ -47,14 +81,18 @@ async function latestCode(email: string): Promise<string | undefined> {
     ?.text.match(/code is (\d{6})/)?.[1]
 }
 
+async function codeFor(email: string): Promise<string> {
+  let code: string | undefined
+  await expect.poll(async () => (code = await latestCode(email)), { message: `sign-in code for ${email}` }).toBeTruthy()
+  return code ?? ''
+}
+
 // On the login page: email -> code from the dev mail log -> signed in. New users then get the name prompt.
 export async function signInWithCode(page: Page, email: string): Promise<void> {
   await page.getByTestId('login-email').fill(email)
   await page.getByTestId('login-send-code').click()
   await expect(page.getByTestId('login-code')).toBeVisible()
-  let code: string | undefined
-  await expect.poll(async () => (code = await latestCode(email)), { message: `sign-in code for ${email}` }).toBeTruthy()
-  await page.getByTestId('login-code').fill(code ?? '')
+  await page.getByTestId('login-code').fill(await codeFor(email))
   await page.getByTestId('login-verify').click()
 }
 
@@ -144,4 +182,59 @@ export async function walkUntilBlocked(page: Page, key: (typeof KEYS)[keyof type
   } finally {
     await page.keyboard.up(key)
   }
+}
+
+// Someone without a browser: signs up over HTTP straight to the e2e server and enters the office room with the
+// Colyseus SDK in Node, so a test can add several chat authors quickly. Each has its own X-Forwarded-For, so Better
+// Auth's per-IP limits on codes and sign-ins never count them with the browsers.
+export interface Headless {
+  userId: string
+  name: string
+  api: APIRequestContext
+  room: Room | null
+}
+
+const SERVER_URL = `http://127.0.0.1:${SERVER_PORT}`
+let headlessCount = 0
+
+async function ok(response: Promise<APIResponse>): Promise<APIResponse> {
+  const answer = await response
+  if (!answer.ok()) throw new Error(`${answer.url()}: ${answer.status()} ${await answer.text()}`)
+  return answer
+}
+
+// Signs up `email` with `name` and joins the company of the invite link `token`.
+export async function headlessMember(email: string, name: string, inviteToken: string): Promise<Headless> {
+  const n = ++headlessCount
+  const api = await request.newContext({
+    baseURL: SERVER_URL,
+    extraHTTPHeaders: { origin: CLIENT_ORIGIN, 'x-forwarded-for': `10.77.${Math.floor(n / 250)}.${(n % 250) + 1}` },
+  })
+  await ok(api.post('/api/auth/email-otp/send-verification-otp', { data: { email, type: 'sign-in' } }))
+  const otp = await codeFor(email)
+  const signedIn = (await (await ok(api.post('/api/auth/sign-in/email-otp', { data: { email, otp, name } }))).json()) as { user: { id: string } }
+  await ok(api.post(API.acceptInviteLink(inviteToken), { data: {} }))
+  return { userId: signedIn.user.id, name, api, room: null }
+}
+
+export async function enterRoom(person: Headless, officeId: string): Promise<Room> {
+  const { token } = (await (await ok(person.api.get(API.rtToken(officeId)))).json()) as { token: string }
+  const client = new Client(SERVER_URL)
+  client.auth.token = token
+  const room = await client.joinOrCreate(ROOM_NAME, { officeId })
+  // The pushes (chat:new, waves) are not needed here; a handler keeps the SDK from warning about each one.
+  room.onMessage('*', () => undefined)
+  person.room = room
+  return room
+}
+
+// chat:send through the room, as the chat bar sends it; resolves the stored message.
+export async function say(person: Headless, body: string): Promise<ChatMessage> {
+  if (!person.room) throw new Error(`${person.name} is not in the room`)
+  return ChatSendResponseSchema.parse(await person.room.request(MSG.chatSend, { clientMsgId: randomUUID(), body })).message
+}
+
+export async function leaveRoom(person: Headless): Promise<void> {
+  await person.room?.leave()
+  person.room = null
 }
