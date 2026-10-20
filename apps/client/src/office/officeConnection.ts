@@ -5,7 +5,7 @@ import { leaveReason, type JoinOffice, type OfficeConnectionHandle, type OfficeL
 export const MATCHMAKE_AUTH_FAILED = 525
 
 // signed_out: the session is gone (the token route answered 401); the page sends the user to the sign-in page.
-export type ClosedReason = 'replaced' | 'removed' | 'role_changed' | 'lost' | 'denied' | 'signed_out' | 'error'
+export type ClosedReason = 'replaced' | 'removed' | 'role_changed' | 'kicked' | 'lost' | 'denied' | 'signed_out' | 'error'
 
 export type ConnectionState =
   | { kind: 'idle' }

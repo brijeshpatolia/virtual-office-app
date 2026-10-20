@@ -6,6 +6,7 @@ import { useResource } from '../hooks/useResource.ts'
 import { joinColyseusOffice } from '../net/colyseusLink.ts'
 import { ErrorMessage, Message, SignedIn, signOut } from '../pages/common.tsx'
 import { useAccessToken, useOfficeConnection } from './hooks.ts'
+import { httpOfficeApi, type OfficeSelf } from './officeApi.ts'
 import type { InviteActions } from './OfficeHeader.tsx'
 import { OfficeView } from './OfficeView.tsx'
 
@@ -47,6 +48,11 @@ function ConnectedOffice({ details, me }: { details: OfficeResponse; me: MeRespo
     [office.id, role],
   )
   const company = me.orgs.find((org) => org.id === office.orgId)
+  const self = useMemo<OfficeSelf>(
+    () => ({ userId: me.user.id, name: me.user.name, role, orgId: office.orgId, officeId: office.id }),
+    [me.user.id, me.user.name, role, office.orgId, office.id],
+  )
+  const api = useMemo(() => httpOfficeApi(self), [self])
 
   const leaveAndSignOut = (): void => {
     void signOut()
@@ -58,6 +64,8 @@ function ConnectedOffice({ details, me }: { details: OfficeResponse; me: MeRespo
       officeName={office.name}
       userName={me.user.name}
       invites={invites}
+      self={self}
+      api={api}
       onSignOut={leaveAndSignOut}
       connection={connection}
       onReconnect={reconnect}

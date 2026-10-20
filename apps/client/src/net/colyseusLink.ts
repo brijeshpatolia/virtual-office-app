@@ -1,17 +1,27 @@
 import { Callbacks, Client, type Room } from '@colyseus/sdk'
 import type { IRef } from '@colyseus/schema'
 import {
+  AdminKickResponseSchema,
+  AdminMuteResponseSchema,
+  BlockSetResponseSchema,
+  ChatDeletedSchema,
+  ChatDeleteResponseSchema,
+  ChatMessageSchema,
+  ChatMutedSchema,
+  ChatSendResponseSchema,
   MoveRejectSchema,
   MSG,
   ROOM_NAME,
   SitResponseSchema,
   StandResponseSchema,
+  StatusSetResponseSchema,
+  WaveReceivedSchema,
   type JoinOptions,
   type OfficeStateView,
   type PlayerState,
 } from '@vo/shared'
 import { colyseusEndpoint } from '../api/serverUrl.ts'
-import type { JoinOffice, OfficeConnectionHandle, OfficeLink } from './officeLink.ts'
+import type { JoinOffice, OfficeConnectionHandle, OfficeLink, Unsubscribe } from './officeLink.ts'
 
 // The synced state as Colyseus decodes it: Schema refs, so the callback API accepts them.
 type Synced<T> = IRef & {
@@ -40,6 +50,21 @@ export const joinColyseusOffice: JoinOffice = async (officeId, token) => {
 
 const EMPTY = new Map<never, never>()
 
+// A chat message that gets no answer in this time counts as not sent; the client may retry with the same clientMsgId.
+export const CHAT_SEND_TIMEOUT_MS = 8000
+
+interface Parser<T> {
+  safeParse(data: unknown): { success: true; data: T } | { success: false }
+}
+
+// A server push, checked with its schema; payloads that do not match are dropped.
+function listen<T>(room: OfficeRoom, type: string, schema: Parser<T>, handler: (payload: T) => void): Unsubscribe {
+  return room.onMessage(type, (payload: unknown) => {
+    const parsed = schema.safeParse(payload)
+    if (parsed.success) handler(parsed.data)
+  })
+}
+
 function wrapRoom(room: OfficeRoom): OfficeConnectionHandle {
   const callbacks = Callbacks.get(room)
   const link: OfficeLink = {
@@ -52,11 +77,7 @@ function wrapRoom(room: OfficeRoom): OfficeConnectionHandle {
     onPlayerAdd: (handler) => callbacks.onAdd('players', (player, sessionId) => handler(player, sessionId)),
     onPlayerRemove: (handler) => callbacks.onRemove('players', (player, sessionId) => handler(player, sessionId)),
     onPlayerChange: (player, handler) => callbacks.onChange(player as SyncedPlayer, handler),
-    onMoveReject: (handler) =>
-      room.onMessage(MSG.moveReject, (payload: unknown) => {
-        const parsed = MoveRejectSchema.safeParse(payload)
-        if (parsed.success) handler(parsed.data)
-      }),
+    onMoveReject: (handler) => listen(room, MSG.moveReject, MoveRejectSchema, handler),
     // While the connection is down the SDK would queue moves and replay them after the reconnect; drop them instead.
     sendMove: (move) => {
       if (room.connection.isOpen) room.send(MSG.move, move)
@@ -64,6 +85,29 @@ function wrapRoom(room: OfficeRoom): OfficeConnectionHandle {
     sendActivity: (activity) => room.send(MSG.activity, activity),
     sit: async (seatId) => SitResponseSchema.parse(await room.request(MSG.sit, { seatId })),
     stand: async () => StandResponseSchema.parse(await room.request(MSG.stand, {})),
+    sendChat: async (request) =>
+      ChatSendResponseSchema.parse(await room.request(MSG.chatSend, request, { timeout: CHAT_SEND_TIMEOUT_MS })).message,
+    deleteChat: async (id) => {
+      ChatDeleteResponseSchema.parse(await room.request(MSG.chatDelete, { id }))
+    },
+    markChatRead: (lastReadId) => {
+      if (room.connection.isOpen) room.send(MSG.chatRead, { lastReadId })
+    },
+    onChatNew: (handler) => listen(room, MSG.chatNew, ChatMessageSchema, handler),
+    onChatDeleted: (handler) => listen(room, MSG.chatDeleted, ChatDeletedSchema, handler),
+    onChatMuted: (handler) => listen(room, MSG.chatMuted, ChatMutedSchema, handler),
+    setStatus: async (request) => StatusSetResponseSchema.parse(await room.request(MSG.statusSet, request)),
+    // A wave queued while offline would arrive late and out of context; drop it.
+    wave: (targetUserId) => {
+      if (room.connection.isOpen) room.send(MSG.wave, { targetUserId })
+    },
+    onWaveReceived: (handler) => listen(room, MSG.waveReceived, WaveReceivedSchema, handler),
+    setBlocked: async (userId, blocked) =>
+      BlockSetResponseSchema.parse(await room.request(MSG.blockSet, { userId, blocked })).blockedUserIds,
+    mute: async (userId, minutes) => AdminMuteResponseSchema.parse(await room.request(MSG.adminMute, { userId, minutes })).until,
+    kick: async (userId) => {
+      AdminKickResponseSchema.parse(await room.request(MSG.adminKick, { userId }))
+    },
   }
   return {
     link,

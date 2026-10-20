@@ -1,0 +1,31 @@
+/* Visible keyboard focus everywhere (inline styles cannot express :focus-visible). */
+:focus-visible {
+  outline: 2px solid #4d8dff;
+  outline-offset: 2px;
+}
+
+.vo-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* A message's actions show on hover and on keyboard focus. */
+.vo-chat-actions {
+  opacity: 0;
+}
+.vo-chat-row:hover .vo-chat-actions,
+.vo-chat-row:focus-within .vo-chat-actions {
+  opacity: 1;
+}
+
+.vo-chat-link {
+  color: #2f6fed;
+  overflow-wrap: anywhere;
+}

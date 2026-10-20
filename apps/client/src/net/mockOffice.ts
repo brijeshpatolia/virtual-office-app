@@ -1,28 +1,42 @@
 import {
   avatarColor,
   buildGrid,
+  effectiveStatus,
   FEET_OFFSET_Y,
   MAX_SPEED,
+  mentionToken,
+  parseMentions,
   PATCH_RATE_MS,
   parseOfficeMap,
   ROOM_CLOSE,
   SIT_RADIUS,
+  StatusTextSchema,
   ZoneTracker,
   lineOfSight,
+  type ChatDeleted,
+  type ChatMessage,
+  type ChatMuted,
+  type ChosenStatus,
   type Facing,
   type Grid,
   type MoveReject,
   type OfficeMap,
+  type OrgRole,
   type PlayerState,
   type SeatState,
-  type SitRejectReason,
+  type WaveReceived,
 } from '@vo/shared'
+import type { OfficeApi } from '../office/officeApi.ts'
+import { MOCK_LINES, MOCK_OWN, mockChatServer, type MockChatServer } from './mockChat.ts'
 import type { JoinOffice, OfficeConnectionHandle, OfficeLink, Unsubscribe } from './officeLink.ts'
 
 // DEV ONLY: a stand-in for the office server, so the office renders without accounts or a running server
-// (route /dev/office). It accepts moves along clear lines, computes zones, handles seats and walks two bots.
-// window.__voMock: close(code) simulates a server close (4100 replaced, 4101 removed, 4102 role changed, 4001 shutdown), drop() a
-// dropped connection, rejectTo(x, y) a move:reject that snaps the own avatar to (x, y).
+// (route /dev/office). It accepts moves along clear lines, computes zones, handles seats, walks two bots and runs
+// the chat, status, waves, blocks and moderation in memory (mockChat.ts). Bots answer a mention and wave back.
+// window.__voMock: close(code) simulates a server close (4100 replaced, 4101 removed, 4102 role changed, 4103 kicked,
+// 4001 shutdown), drop() a dropped connection, rejectTo(x, y) a move:reject that snaps the own avatar to (x, y),
+// say(name, text) a chat message from a bot, mentionMe(name) a bot mentioning you, wave(name) a wave from a bot,
+// muteMe(minutes) mutes you (0 unmutes).
 
 type MutablePlayer = { -readonly [K in keyof PlayerState]: PlayerState[K] }
 type MutableSeat = { -readonly [K in keyof SeatState]: SeatState[K] }
@@ -48,11 +62,31 @@ class Signal<A extends unknown[]> {
   }
 }
 
-function rejected(reason: SitRejectReason): Error {
+function rejected(reason: string): Error {
   return Object.assign(new Error(reason), { name: 'rejected', reason })
 }
 
+// A little network delay for requests.
+const answer = <T>(value: () => T, ms = 120): Promise<T> =>
+  new Promise((resolve, reject) =>
+    window.setTimeout(() => {
+      try {
+        resolve(value())
+      } catch (error) {
+        reject(error)
+      }
+    }, ms),
+  )
+
 class MockOffice {
+  private readonly chat: MockChatServer
+  private readonly chosen = new Map<string, ChosenStatus>()
+  private readonly away = new Set<string>()
+  private readonly chatNew = new Signal<[ChatMessage]>()
+  private readonly chatDeleted = new Signal<[ChatDeleted]>()
+  private readonly chatMuted = new Signal<[ChatMuted]>()
+  private readonly waves = new Signal<[WaveReceived]>()
+  private readonly timers = new Set<number>()
   private readonly map: OfficeMap
   private readonly grid: Grid
   private readonly players = new Map<string, MutablePlayer>()
@@ -70,12 +104,14 @@ class MockOffice {
   private timer: number | undefined
   private lastSeq = 0
 
-  constructor(map: OfficeMap) {
+  constructor(map: OfficeMap, chat: MockChatServer) {
+    this.chat = chat
     this.map = map
     this.grid = buildGrid(map, ['wall', 'furniture'])
     for (const seat of map.seats) this.seats.set(seat.id, { occupantId: '' })
     const spawn = map.spawns.find((s) => s.id === 'main') ?? { x: map.widthPx / 2, y: map.heightPx / 2 }
-    this.addPlayer(OWN_SESSION, 'mock-user-own', 'You (mock)', spawn.x, spawn.y - FEET_OFFSET_Y)
+    const own = this.addPlayer(OWN_SESSION, MOCK_OWN.userId, MOCK_OWN.name, spawn.x, spawn.y - FEET_OFFSET_Y)
+    own.statusText = chat.statusText
     this.addBot('mock-bot-ada', 'Ada', [
       [300, 360],
       [700, 360],
@@ -89,8 +125,15 @@ class MockOffice {
     const grace = this.addPlayer('mock-bot-grace', 'mock-user-grace', 'Grace', 0, 0)
     const seat = map.seats.find((s) => s.hasComputer)
     if (seat) this.seatPlayer(grace, seat.id)
-    grace.status = 'away'
+    this.away.add('mock-bot-grace')
+    this.chosen.set('mock-bot-linus', 'busy')
+    const linus = this.players.get('mock-bot-linus')
+    if (linus) linus.statusText = 'Heads down until 3pm'
+    const ada = this.players.get('mock-bot-ada')
+    if (ada) ada.statusText = 'Ask me about the roadmap'
+    for (const sessionId of this.players.keys()) this.refreshStatus(sessionId)
     this.timer = window.setInterval(() => this.tick(), PATCH_RATE_MS)
+    this.later(() => this.botChatter(), 45_000)
   }
 
   handle(): OfficeConnectionHandle {
@@ -105,7 +148,11 @@ class MockOffice {
       onPlayerChange: (player, handler) => this.signalFor(player).on(handler),
       onMoveReject: (handler) => this.rejects.on(handler),
       sendMove: (move) => this.move(move.x, move.y, move.dir, move.moving, move.seq),
-      sendActivity: ({ hidden }) => this.update(this.own, { status: hidden ? 'away' : 'available' }),
+      sendActivity: ({ hidden }) => {
+        if (hidden) this.away.add(OWN_SESSION)
+        else this.away.delete(OWN_SESSION)
+        this.refreshStatus(OWN_SESSION)
+      },
       sit: async (seatId) => {
         const seat = this.map.seats.find((s) => s.id === seatId)
         if (!seat) throw rejected('invalid')
@@ -118,6 +165,55 @@ class MockOffice {
         this.unseat(this.own)
         return { ok: true as const, x: this.own.x, y: this.own.y }
       },
+      sendChat: (request) =>
+        answer(() => {
+          const result = this.chat.send(MOCK_OWN.userId, this.own.name, request.clientMsgId, request.body, Date.now())
+          if (!result.ok) throw rejected(result.reason)
+          if (result.created) this.botsAnswer(result.message)
+          return result.message
+        }),
+      deleteChat: (id) =>
+        answer(() => {
+          const result = this.chat.delete(MOCK_OWN.userId, id, Date.now())
+          if (result !== 'ok') throw rejected(result)
+          this.chatDeleted.emit({ id })
+        }),
+      markChatRead: (lastReadId) => this.chat.markRead(lastReadId),
+      onChatNew: (handler) => this.chatNew.on(handler),
+      onChatDeleted: (handler) => this.chatDeleted.on(handler),
+      onChatMuted: (handler) => this.chatMuted.on(handler),
+      setStatus: (request) =>
+        answer(() => {
+          const parsed = StatusTextSchema.safeParse(request.statusText ?? this.own.statusText)
+          if (!parsed.success) throw rejected('invalid')
+          const text = parsed.data
+          this.chosen.set(OWN_SESSION, request.status)
+          this.chat.setStatusText(text)
+          this.update(this.own, { statusText: text })
+          this.refreshStatus(OWN_SESSION)
+          return { ok: true as const, status: request.status, statusText: text }
+        }),
+      wave: (targetUserId) => this.waveAtBot(targetUserId),
+      onWaveReceived: (handler) => this.waves.on(handler),
+      setBlocked: (userId, blocked) =>
+        answer(() => {
+          const result = this.chat.setBlocked(userId, blocked)
+          if (!result.ok) throw rejected(result.reason)
+          return result.blockedUserIds
+        }),
+      mute: (userId, minutes) =>
+        answer(() => {
+          const result = this.chat.mute(MOCK_OWN.userId, userId, minutes, Date.now())
+          if (!result.ok) throw rejected(result.reason)
+          return result.until
+        }),
+      kick: (userId) =>
+        answer(() => {
+          const entry = [...this.players].find(([, p]) => p.userId === userId)
+          if (!entry) throw rejected('not_found')
+          if (!this.chat.moderates(MOCK_OWN.userId, userId)) throw rejected('not_allowed')
+          this.removePlayer(entry[0])
+        }),
     }
     Object.assign(window, {
       __voMock: {
@@ -127,6 +223,15 @@ class MockOffice {
           this.update(this.own, { x, y, moving: false })
           this.rejects.emit({ x, y, seq: this.lastSeq, reason: 'collision' })
         },
+        say: (name: string, text: string) => this.botSays(name, text),
+        mentionMe: (name = 'Ada') => this.botSays(name, `${mentionToken(MOCK_OWN.userId)} got a minute?`),
+        wave: (name = 'Ada') => {
+          const bot = this.botNamed(name)
+          if (bot && this.chosen.get(OWN_SESSION) !== 'dnd' && !this.chat.blocked.includes(bot.userId)) {
+            this.waves.emit({ fromUserId: bot.userId, fromName: bot.name })
+          }
+        },
+        muteMe: (minutes = 15) => this.chatMuted.emit({ until: this.chat.muteOwn(minutes, Date.now()) }),
       },
     })
     return {
@@ -165,6 +270,66 @@ class MockOffice {
     return player
   }
 
+  private removePlayer(sessionId: string): void {
+    const player = this.players.get(sessionId)
+    if (!player) return
+    this.unseat(player)
+    this.players.delete(sessionId)
+    this.removed.emit(player, sessionId)
+  }
+
+  private refreshStatus(sessionId: string): void {
+    const player = this.players.get(sessionId)
+    if (!player) return
+    const chosen = this.chosen.get(sessionId) ?? 'available'
+    const inRoomZone = this.map.zones.find((zone) => zone.id === player.zoneId)?.mediaMode === 'room'
+    const status = effectiveStatus({ chosen, away: this.away.has(sessionId), inRoomZone })
+    if (status !== player.status || chosen !== player.chosenStatus) this.update(player, { status, chosenStatus: chosen })
+  }
+
+  private later(run: () => void, ms: number): void {
+    const timer = window.setTimeout(() => {
+      this.timers.delete(timer)
+      run()
+    }, ms)
+    this.timers.add(timer)
+  }
+
+  private botNamed(name: string): PlayerState | undefined {
+    return [...this.players.values()].find((p) => p.name.toLowerCase() === name.toLowerCase() && p.userId !== MOCK_OWN.userId)
+  }
+
+  private botSays(name: string, text: string): void {
+    const bot = this.botNamed(name)
+    if (!bot) return
+    const result = this.chat.send(bot.userId, bot.name, crypto.randomUUID(), text, Date.now())
+    if (result.ok && result.created) this.chatNew.emit(result.message)
+  }
+
+  // A mentioned bot in the room answers with a mention of you.
+  private botsAnswer(message: ChatMessage): void {
+    const { userIds } = parseMentions(message.body)
+    for (const player of this.players.values()) {
+      if (!userIds.includes(player.userId) || player.userId === MOCK_OWN.userId) continue
+      this.later(() => this.botSays(player.name, `${mentionToken(MOCK_OWN.userId)} on it!`), 1200)
+    }
+  }
+
+  private waveAtBot(targetUserId: string): void {
+    const bot = [...this.players.values()].find((p) => p.userId === targetUserId)
+    if (!bot || bot.userId === MOCK_OWN.userId || bot.status === 'dnd' || this.chat.blocked.includes(bot.userId)) return
+    this.later(() => {
+      if (this.chosen.get(OWN_SESSION) !== 'dnd') this.waves.emit({ fromUserId: bot.userId, fromName: bot.name })
+    }, 1000)
+  }
+
+  private botChatter(): void {
+    const bots = [...this.players.values()].filter((p) => p.userId !== MOCK_OWN.userId)
+    const bot = bots[Math.floor(Math.random() * bots.length)]
+    if (bot) this.botSays(bot.name, MOCK_LINES[Math.floor(Math.random() * MOCK_LINES.length)] ?? 'Hello')
+    this.later(() => this.botChatter(), 40_000 + Math.random() * 30_000)
+  }
+
   private addBot(sessionId: string, name: string, path: Array<[number, number]>): void {
     const [x, y] = path[0] as [number, number]
     this.addPlayer(sessionId, `mock-user-${name.toLowerCase()}`, name, x, y)
@@ -191,7 +356,9 @@ class MockOffice {
     const inside = x >= 0 && y + FEET_OFFSET_Y >= 0 && x < this.map.widthPx && y + FEET_OFFSET_Y < this.map.heightPx
     if (!inside || !lineOfSight(this.grid, own.x, own.y + FEET_OFFSET_Y, x, y + FEET_OFFSET_Y)) return void reject('collision')
     const zoneId = this.trackers.get(OWN_SESSION)?.update(x, y + FEET_OFFSET_Y, performance.now()).zoneId ?? ''
-    this.update(own, { x, y, dir, moving, zoneId, status: 'available' })
+    this.update(own, { x, y, dir, moving, zoneId })
+    this.away.delete(OWN_SESSION)
+    this.refreshStatus(OWN_SESSION)
   }
 
   private seatPlayer(player: MutablePlayer, seatId: string): void {
@@ -224,6 +391,7 @@ class MockOffice {
       const y = player.y + dy * k
       const zoneId = this.trackers.get(bot.sessionId)?.update(x, y + FEET_OFFSET_Y, performance.now()).zoneId ?? ''
       this.update(player, { x, y, dir, moving: true, zoneId })
+      this.refreshStatus(bot.sessionId)
     }
     for (const player of [...this.dirty]) this.changeHandlers.get(player)?.emit()
     this.dirty.clear()
@@ -237,11 +405,20 @@ class MockOffice {
   private close(code: number): void {
     window.clearInterval(this.timer)
     this.timer = undefined
+    for (const timer of this.timers) window.clearTimeout(timer)
+    this.timers.clear()
     this.left.emit(code)
   }
 }
 
-export const joinMockOffice: JoinOffice = async () => {
-  const response = await fetch(MAP_URL)
-  return new MockOffice(parseOfficeMap(await response.json())).handle()
+// The mock office for one own role (the first call picks it): the room join and the HTTP side.
+export function mockOffice(role: OrgRole): { join: JoinOffice; api: OfficeApi } {
+  const chat = mockChatServer(role)
+  return {
+    join: async () => {
+      const response = await fetch(MAP_URL)
+      return new MockOffice(parseOfficeMap(await response.json()), chat).handle()
+    },
+    api: chat.api(),
+  }
 }
