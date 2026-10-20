@@ -22,6 +22,8 @@ export function presenceHandlers(room: HandlerContext): RoomHandlers {
     },
   })
   room.onDispose(() => statusTexts.flush())
+  // A rejoin right after a change must read the new text, not the one before it.
+  room.beforeJoin((userId) => statusTexts.flushKey(userId))
   const waves = createSlidingWindow(WAVE_RATE_LIMIT.waves, WAVE_RATE_LIMIT.windowMs)
   const pairs = createSlidingWindow(1, WAVE_RATE_LIMIT.perTargetMs)
 

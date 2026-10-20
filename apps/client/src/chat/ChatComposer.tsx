@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type ChangeEvent, type Ke
 import { CHAT_MAX_LENGTH } from '@vo/shared'
 import { composerStyle, errorStyle, metaStyle, sendButtonStyle, suggestionsStyle, suggestionStyle, textareaStyle } from './chatStyles.ts'
 import { chatInputAction } from './keys.ts'
-import { encodeMentions, filterCandidates, insertMention, mentionQuery, type MentionCandidate, type MentionPick } from './mentions.ts'
+import { encodeMentions, filterCandidates, insertMention, mentionQuery, shiftPicks, type MentionCandidate, type MentionPick } from './mentions.ts'
 
 const COUNTER_FROM = CHAT_MAX_LENGTH - 200
 
@@ -48,11 +48,13 @@ export function ChatComposer({ candidates, focusRequest, onSend }: ChatComposerP
     }
   }, [text])
 
+  // Picks are kept by position: an edit that touches one turns it back into plain text.
   const onChange = (event: ChangeEvent<HTMLTextAreaElement>): void => {
-    setText(event.target.value)
-    setCaret(event.target.selectionStart)
+    const { value, selectionStart } = event.target
+    setPicks((list) => shiftPicks(list, text, value, selectionStart))
+    setText(value)
+    setCaret(selectionStart)
     setActive(0)
-    if (event.target.value === '') setPicks([])
   }
 
   const pick = (candidate: MentionCandidate): void => {
@@ -60,7 +62,7 @@ export function ChatComposer({ candidates, focusRequest, onSend }: ChatComposerP
     const inserted = insertMention(text, query, caret, candidate)
     setText(inserted.text)
     setCaret(inserted.caret)
-    setPicks((list) => [...list, inserted.pick])
+    setPicks((list) => [...shiftPicks(list, text, inserted.text, inserted.caret), inserted.pick])
     nextCaret.current = inserted.caret
     setActive(0)
   }
@@ -122,6 +124,7 @@ export function ChatComposer({ candidates, focusRequest, onSend }: ChatComposerP
               data-testid="chat-mention-option"
             >
               @{candidate.label}
+              {candidate.detail && <span style={metaStyle}> · {candidate.detail}</span>}
             </li>
           ))}
         </ul>

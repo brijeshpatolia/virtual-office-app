@@ -21,6 +21,7 @@ const READ_CANDIDATES = 3
 
 // chat:send, chat:delete (requests) and chat:read (send). The message is stored before 'chat:new' goes out, so a
 // failed write broadcasts nothing; a retried clientMsgId answers the stored message and broadcasts nothing.
+// 'chat:new' goes to each other client with its own mentionsYou, so a mention never notifies across a block.
 export function chatHandlers(room: HandlerContext): RoomHandlers {
   // Message ids are lowercase uuidv7 here, so the greater string is the newer message.
   const reads = createThrottledWriter<ReadMarks>({
@@ -34,6 +35,8 @@ export function chatHandlers(room: HandlerContext): RoomHandlers {
     },
   })
   room.onDispose(() => reads.flush())
+  // A read waiting for the interval is written when the user leaves, so the next page load counts it.
+  room.onSessionEnd((userId) => void reads.flushKey(userId))
 
   return {
     [MSG.chatSend]: request(MSG.chatSend, async (client, message, ctx) => {
@@ -46,7 +49,17 @@ export function chatHandlers(room: HandlerContext): RoomHandlers {
         if (result.mutedUntil !== undefined) client.send(MSG.chatMuted, { until: result.mutedUntil.toISOString() })
         return ctx.reject(result.reason)
       }
-      if (result.created) room.broadcast(MSG.chatNew, result.message, client)
+      if (result.created) {
+        const audience = room.recipients(client)
+        const mentioned = await chat
+          .mentionedAmong(auth, auth.userId, result.mentions, audience.map((r) => r.userId))
+          .catch((error: unknown) => {
+            console.error('OfficeRoom: chat:send mentions failed:', error)
+            return new Set<string>()
+          })
+        // Read again: who joined meanwhile gets it too.
+        for (const r of room.recipients(client)) r.client.send(MSG.chatNew, { ...result.message, mentionsYou: mentioned.has(r.userId) })
+      }
       return { ok: true, message: result.message } satisfies ChatSendResponse
     }),
 

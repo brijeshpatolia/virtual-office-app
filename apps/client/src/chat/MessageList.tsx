@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState, type UIEvent } from 'react'
+import { memo, useLayoutEffect, useRef, useState, type UIEvent } from 'react'
 import type { ChatMessage } from '@vo/shared'
 import { unreadBadge } from '@vo/shared'
 import type { PendingMessage } from './chatModel.ts'
@@ -6,7 +6,6 @@ import { badgeStyle, errorStyle, linkLikeStyle, listStyle, mentionRowStyle, meta
 import { fullTime, shortTime } from './format.ts'
 import { MessageBody } from './MessageBody.tsx'
 import { blockedRowText, type ChatRow } from './messages.ts'
-import { mentionsUser } from './unread.ts'
 
 // Within this many px of the end the list counts as scrolled to the bottom; this close to the top it loads older.
 const BOTTOM_SLACK = 24
@@ -35,12 +34,11 @@ export interface MessageListProps {
   onAuthor(userId: string): void
 }
 
-type RowProps = Pick<MessageListProps, 'selfId' | 'selfName' | 'canDeleteAll' | 'nameOf' | 'onDelete' | 'onRetry' | 'onDiscard' | 'onAuthor'>
-
+// The list. Its rows are memoized: with stable callbacks and nameOf (ChatBar), a new message renders one row.
+// It is not a live region (history pages would be read out); ChatBar announces live messages on their own.
 export function MessageList(props: MessageListProps) {
   const { rows, pending, hasOlder, loadingOlder, onLoadOlder, onAtBottom } = props
   const { selfId, selfName, canDeleteAll, nameOf, onDelete, onRetry, onDiscard, onAuthor } = props
-  const rowProps: RowProps = { selfId, selfName, canDeleteAll, nameOf, onDelete, onRetry, onDiscard, onAuthor }
   const list = useRef<HTMLDivElement>(null)
   const atBottom = useRef(true)
   // Set before an older page loads: keeps the visible messages in place when it lands above them.
@@ -94,8 +92,7 @@ export function MessageList(props: MessageListProps) {
         ref={list}
         style={listStyle}
         onScroll={onScroll}
-        role="log"
-        aria-live="polite"
+        role="region"
         aria-busy={loadingOlder}
         aria-label="Office chat messages"
         tabIndex={0}
@@ -125,11 +122,19 @@ export function MessageList(props: MessageListProps) {
               {blockedRowText(row.count, row.people)}
             </div>
           ) : (
-            <MessageRow key={row.message.id} message={row.message} {...rowProps} />
+            <MessageRow
+              key={row.message.id}
+              message={row.message}
+              selfId={selfId}
+              canDeleteAll={canDeleteAll}
+              nameOf={nameOf}
+              onDelete={onDelete}
+              onAuthor={onAuthor}
+            />
           ),
         )}
         {pending.map((p) => (
-          <PendingRow key={p.clientMsgId} item={p} {...rowProps} />
+          <PendingRow key={p.clientMsgId} item={p} selfId={selfId} selfName={selfName} nameOf={nameOf} onRetry={onRetry} onDiscard={onDiscard} />
         ))}
       </div>
       {showJump && (
@@ -151,11 +156,21 @@ export function MessageList(props: MessageListProps) {
   )
 }
 
-function MessageRow({ message, selfId, canDeleteAll, nameOf, onDelete, onAuthor }: RowProps & { message: ChatMessage }) {
+interface MessageRowProps {
+  message: ChatMessage
+  selfId: string
+  canDeleteAll: boolean
+  nameOf(userId: string): string | undefined
+  onDelete(id: string): void
+  onAuthor(userId: string): void
+}
+
+const MessageRow = memo(function MessageRow({ message, selfId, canDeleteAll, nameOf, onDelete, onAuthor }: MessageRowProps) {
   const [confirming, setConfirming] = useState(false)
   const deleted = message.deletedAt !== null
   const own = message.authorId === selfId
-  const highlighted = !deleted && !own && mentionsUser(message.body, selfId)
+  // The server's flag: never a mention across a block, whatever tokens the body has.
+  const highlighted = !deleted && !own && message.mentionsYou
   const canDelete = !deleted && (own || canDeleteAll)
   return (
     <div
@@ -173,7 +188,11 @@ function MessageRow({ message, selfId, canDeleteAll, nameOf, onDelete, onAuthor 
       <time style={metaStyle} dateTime={message.createdAt} title={fullTime(message.createdAt)}>
         {shortTime(message.createdAt)}
       </time>{' '}
-      {deleted ? <span style={noteStyle}>Message deleted</span> : <MessageBody body={message.body} nameOf={nameOf} selfId={selfId} />}
+      {deleted ? (
+        <span style={noteStyle}>Message deleted</span>
+      ) : (
+        <MessageBody body={message.body} nameOf={nameOf} selfId={selfId} mentionsYou={highlighted} />
+      )}
       {canDelete && (
         <span className={confirming ? undefined : 'vo-chat-actions'} style={{ marginLeft: 8, whiteSpace: 'nowrap' }}>
           {confirming ? (
@@ -201,9 +220,18 @@ function MessageRow({ message, selfId, canDeleteAll, nameOf, onDelete, onAuthor 
       )}
     </div>
   )
+})
+
+interface PendingRowProps {
+  item: PendingMessage
+  selfId: string
+  selfName: string
+  nameOf(userId: string): string | undefined
+  onRetry(clientMsgId: string): void
+  onDiscard(clientMsgId: string): void
 }
 
-function PendingRow({ item: pending, selfId, selfName, nameOf, onRetry, onDiscard }: RowProps & { item: PendingMessage }) {
+const PendingRow = memo(function PendingRow({ item: pending, selfId, selfName, nameOf, onRetry, onDiscard }: PendingRowProps) {
   const failed = pending.status === 'failed'
   return (
     <div
@@ -230,4 +258,4 @@ function PendingRow({ item: pending, selfId, selfName, nameOf, onRetry, onDiscar
       )}
     </div>
   )
-}
+})

@@ -9,6 +9,7 @@ import {
   type OfficeStateView,
   type PlayerState,
   type PresenceActivity,
+  type RoleChanged,
   type SitResponse,
   type StandResponse,
   type StatusSetRequest,
@@ -40,7 +41,8 @@ export interface OfficeLink {
   // Chat. The answer is the stored message; a retry with the same clientMsgId answers the same message.
   sendChat(request: ChatSendRequest): Promise<ChatMessage>
   deleteChat(id: string): Promise<void>
-  markChatRead(lastReadId: string): void
+  // false: not sent (the connection is down); send it again later.
+  markChatRead(lastReadId: string): boolean
   onChatNew(handler: (message: ChatMessage) => void): Unsubscribe
   onChatDeleted(handler: (deleted: ChatDeleted) => void): Unsubscribe
   onChatMuted(handler: (muted: ChatMuted) => void): Unsubscribe
@@ -55,7 +57,20 @@ export interface OfficeLink {
   // Owners and admins. mute resolves the end of the mute (ISO), null when unmuted.
   mute(userId: string, minutes: number): Promise<string | null>
   kick(userId: string): Promise<void>
+  // The user's role in the company changed (or changed while the connection was down).
+  onRoleChanged(handler: (changed: RoleChanged) => void): Unsubscribe
 }
+
+// A request the server did not answer in time while the connection stayed open: it may have been handled (so a
+// retry must be idempotent, like chat:send with its clientMsgId).
+export class RequestTimeoutError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'RequestTimeoutError'
+  }
+}
+
+export const isRequestTimeout = (error: unknown): boolean => error instanceof Error && error.name === 'RequestTimeoutError'
 
 // A joined room, plus its lifecycle.
 export interface OfficeConnectionHandle {

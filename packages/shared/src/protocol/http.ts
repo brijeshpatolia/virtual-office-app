@@ -188,11 +188,13 @@ export type ChatHistoryResponse = z.infer<typeof ChatHistoryResponseSchema>
 
 // GET /api/offices/:officeId/chat/unread (members, guests included). The messages after lastReadId (all when
 // null) that the caller can see, are not their own, not deleted and not from someone they blocked; each count
-// stops at UNREAD_COUNT_LIMIT. mentions: of those, the ones that mention the caller or everyone.
+// stops at UNREAD_COUNT_LIMIT. mentions: of those, the ones with mentionsYou (never across a block, either way).
+// mutedUntil: the end of the caller's chat mute in this company, null when not muted.
 export const ChatUnreadResponseSchema = z.object({
   count: z.number().int().nonnegative(),
   mentions: z.number().int().nonnegative(),
   lastReadId: MessageIdSchema.nullable(),
+  mutedUntil: isoDate.nullable(),
 })
 export type ChatUnreadResponse = z.infer<typeof ChatUnreadResponseSchema>
 

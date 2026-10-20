@@ -32,21 +32,20 @@ export interface ChatHistory {
 
 export const EMPTY_HISTORY: ChatHistory = { messages: [], nextBefore: null, loaded: false }
 
-// The newest page, at load and after a reconnect. When it does not reach back to the newest loaded message (more
-// than a page was missed), the older messages are dropped, so the list never has a gap.
-export function withNewestPage(history: ChatHistory, page: ChatHistoryResponse): ChatHistory {
-  const newestLoaded = history.messages.at(-1)?.id
+// The newest page, at load and after a reconnect. anchor: the newest message loaded while the list was known to be
+// complete (before the connection was lost); messages that came in since (live, or the answers to own messages sent
+// meanwhile) may sit above a hole. When the page does not reach back to the anchor (more than a page was missed),
+// only the page and what is newer than it stay, so the list never has a gap and paging goes on below the page.
+export function withNewestPage(history: ChatHistory, page: ChatHistoryResponse, anchor: string | null): ChatHistory {
   const oldestOfPage = page.messages.at(-1)?.id
-  const gap =
-    history.loaded &&
-    newestLoaded !== undefined &&
-    oldestOfPage !== undefined &&
-    page.nextBefore !== null &&
-    compareIds(oldestOfPage, newestLoaded) > 0
-  if (!history.loaded || gap) {
-    return { messages: mergeMessages(gap ? [] : history.messages, page.messages), nextBefore: page.nextBefore, loaded: true }
+  const reset =
+    !history.loaded ||
+    (oldestOfPage !== undefined && page.nextBefore !== null && (anchor === null || compareIds(oldestOfPage, anchor) > 0))
+  if (reset) {
+    const newer = oldestOfPage === undefined ? history.messages : history.messages.filter((m) => compareIds(m.id, oldestOfPage) >= 0)
+    return { messages: mergeMessages(newer, page.messages), nextBefore: page.nextBefore, loaded: true }
   }
-  return { ...history, messages: mergeMessages(history.messages, page.messages) }
+  return { ...history, messages: mergeMessages(history.messages, page.messages), nextBefore: page.nextBefore === null ? null : history.nextBefore }
 }
 
 export function withOlderPage(history: ChatHistory, page: ChatHistoryResponse): ChatHistory {

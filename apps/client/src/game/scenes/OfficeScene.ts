@@ -10,7 +10,7 @@ import { createObstacles } from '../obstacles.ts'
 import { onSceneEnd } from '../onSceneEnd.ts'
 import type { MovementKeys } from '../player/LocalPlayer.ts'
 import { readOfficeMap } from '../readOfficeMap.ts'
-import { handOffKeyboard, leaveTypingElement, watchTyping } from '../typingFocus.ts'
+import { handOffKeyboard, leaveFocusedElement, watchTyping } from '../typingFocus.ts'
 import { OfficeSession } from '../session/OfficeSession.ts'
 import { watchZoneHover } from '../zoneHover.ts'
 
@@ -77,7 +77,7 @@ export class OfficeScene extends Phaser.Scene {
       if (keyboard) handOffKeyboard(keyboard, typing)
     })
     onSceneEnd(this, stopWatching)
-    this.input.on(Phaser.Input.Events.POINTER_DOWN, () => leaveTypingElement())
+    this.input.on(Phaser.Input.Events.POINTER_DOWN, () => leaveFocusedElement())
 
     this.debugOverlay = new MapDebugOverlay(this, this.officeMap)
     this.setMapDebug(mapDebugFromQuery(window.location.search))

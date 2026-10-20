@@ -124,6 +124,8 @@ interface Session {
   readonly sessionId: string
   readonly userId: string
   role: OrgRole
+  // The role the client was last told (role:changed); the join's role at first.
+  notifiedRole: OrgRole
   // null while the room waits for a dropped client to reconnect.
   client: OfficeClient | null
   reconnection: Deferred<OfficeClient> | null
@@ -191,6 +193,8 @@ export function createOfficeRoom(deps: OfficeRoomDeps) {
     // Presence rows still being closed; onDispose waits for them, so a shutdown does not close the database first.
     readonly #pendingWrites = new Set<Promise<void>>()
     readonly #disposeTasks: (() => Promise<void>)[] = []
+    readonly #beforeJoinTasks: ((userId: string) => Promise<void>)[] = []
+    readonly #sessionEndTasks: ((userId: string) => void)[] = []
     readonly #context: HandlerContext = this.#handlerContext()
     #stopPrefsListener: (() => void) | null = null
 
@@ -247,6 +251,7 @@ export function createOfficeRoom(deps: OfficeRoomDeps) {
         sessionId: client.sessionId,
         userId: auth.userId,
         role: auth.role,
+        notifiedRole: auth.role,
         client,
         reconnection: null,
         pos,
@@ -288,6 +293,7 @@ export function createOfficeRoom(deps: OfficeRoomDeps) {
       if (session === undefined) return
       session.client = client
       session.reconnection = null
+      this.#notifyRole(session)
     }
 
     // A consented leave, or a dropped client that did not come back in time.
@@ -326,6 +332,19 @@ export function createOfficeRoom(deps: OfficeRoomDeps) {
         broadcast: (type, payload, except) => {
           this.broadcast(type, payload, except === undefined ? undefined : { except })
         },
+        recipients: (except) => {
+          const list: { client: OfficeClient; userId: string }[] = []
+          for (const session of this.#sessions.values()) {
+            if (session.client !== null && session.client !== except) list.push({ client: session.client, userId: session.userId })
+          }
+          return list
+        },
+        beforeJoin: (task) => {
+          this.#beforeJoinTasks.push(task)
+        },
+        onSessionEnd: (task) => {
+          this.#sessionEndTasks.push(task)
+        },
         kick: (userId) => {
           const session = this.#sessionOf(userId)
           if (session === null) return false
@@ -354,6 +373,9 @@ export function createOfficeRoom(deps: OfficeRoomDeps) {
     async #loadStatusText(userId: string): Promise<string> {
       const prefs = deps.services?.prefs
       if (prefs === undefined) return ''
+      await Promise.all(this.#beforeJoinTasks.map((task) => task(userId))).catch((error: unknown) => {
+        console.error(`OfficeRoom ${this.#officeId}: a pending write before the join failed:`, error)
+      })
       return prefs.get(this.#orgId, userId).then(
         (saved) => saved.statusText,
         (error: unknown) => {
@@ -558,10 +580,18 @@ export function createOfficeRoom(deps: OfficeRoomDeps) {
           session.role = access.role
           // Demoted to guest inside a zone guests may not enter: they enter the office again, at the spawn.
           if (changed && this.#forbiddenWhereItIs(session)) this.#close(session, ROOM_CLOSE.roleChanged)
+          else if (changed) this.#notifyRole(session)
         }
       } finally {
         this.#checkingAccess = false
       }
+    }
+
+    // Tells the client its current role, once per change (a dropped client hears it when it reconnects).
+    #notifyRole(session: Session) {
+      if (session.client === null || session.notifiedRole === session.role) return
+      session.notifiedRole = session.role
+      session.client.send(MSG.roleChanged, { role: session.role })
     }
 
     #forbiddenWhereItIs(session: Session): boolean {
@@ -584,6 +614,7 @@ export function createOfficeRoom(deps: OfficeRoomDeps) {
       const player = this.state.players.get(session.sessionId)
       if (player !== undefined && player.seatId !== '') this.#freeSeat(player.seatId, session.userId)
       this.state.players.delete(session.sessionId)
+      for (const task of this.#sessionEndTasks) task(session.userId)
       const store = deps.store
       if (store === undefined) return
       const write = session.presenceId

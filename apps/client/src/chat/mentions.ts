@@ -4,6 +4,8 @@ export interface MentionCandidate {
   // A user id, or EVERYONE_ID.
   id: string
   label: string
+  // Shown after the label when another candidate has the same one.
+  detail?: string
 }
 
 export const EVERYONE_ID = '<everyone>'
@@ -39,12 +41,14 @@ export function filterCandidates(candidates: readonly MentionCandidate[], query:
   return scored.slice(0, limit).map((s) => s.candidate)
 }
 
+// One mention picked from the list: its display text at `start` in the draft, and the token it stands for.
 export interface MentionPick {
+  start: number
   display: string
   token: string
 }
 
-// Replaces the '@query' before the caret with '@Label ' and returns what to remember for the send.
+// Replaces the '@query' before the caret with '@Label ' and returns the pick at its place.
 export function insertMention(
   text: string,
   query: MentionQuery,
@@ -53,18 +57,49 @@ export function insertMention(
 ): { text: string; caret: number; pick: MentionPick } {
   const display = `@${candidate.label}`
   const next = `${text.slice(0, query.start)}${display} ${text.slice(caret)}`
-  return { text: next, caret: query.start + display.length + 1, pick: { display, token: tokenOf(candidate) } }
+  return { text: next, caret: query.start + display.length + 1, pick: { start: query.start, display, token: tokenOf(candidate) } }
 }
 
-const escapeRegExp = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+// The picks after an edit from `before` to `after` (caret: where the edit ended in `after`). A pick the edit touched
+// is dropped (it is plain text from then on); the ones after it move with the text.
+export function shiftPicks(picks: readonly MentionPick[], before: string, after: string, caret: number): MentionPick[] {
+  if (picks.length === 0 || before === after) return [...picks]
+  // The text after the caret is what stayed; the edit is [prefix, caret) in `after`.
+  const maxSuffix = Math.min(after.length - caret, before.length)
+  let suffix = 0
+  while (suffix < maxSuffix && before[before.length - 1 - suffix] === after[after.length - 1 - suffix]) suffix++
+  const maxPrefix = Math.min(caret, before.length - suffix)
+  let prefix = 0
+  while (prefix < maxPrefix && before[prefix] === after[prefix]) prefix++
+  const editedUntil = before.length - suffix
+  const delta = after.length - before.length
+  return picks.flatMap((pick) => {
+    if (pick.start + pick.display.length <= prefix) return [pick]
+    if (pick.start >= editedUntil) return [{ ...pick, start: pick.start + delta }]
+    return []
+  })
+}
 
-// The body to send: each remembered '@Label' that still stands as a whole word becomes its token. Everything else,
-// including an '@name' typed by hand, stays plain text, so a mention always comes from the autocomplete.
+const WORD_CHAR = /[\p{L}\p{N}_]/u
+
+// The body to send: each pick that still stands where it was put, as a whole word, becomes its token. Everything
+// else, including an '@name' typed by hand or a second person with the same name, stays as typed or as picked.
 export function encodeMentions(text: string, picks: readonly MentionPick[]): string {
-  const tokens = new Map<string, string>()
-  for (const pick of picks) if (!tokens.has(pick.display)) tokens.set(pick.display, pick.token)
-  if (tokens.size === 0) return text
-  const alternatives = [...tokens.keys()].sort((a, b) => b.length - a.length).map(escapeRegExp)
-  const pattern = new RegExp(`(?<![\\p{L}\\p{N}_])(?:${alternatives.join('|')})(?![\\p{L}\\p{N}_])`, 'gu')
-  return text.replace(pattern, (display) => tokens.get(display) ?? display)
+  let body = ''
+  let at = 0
+  for (const pick of [...picks].sort((a, b) => a.start - b.start)) {
+    const end = pick.start + pick.display.length
+    const whole = !WORD_CHAR.test(text[pick.start - 1] ?? '') && !WORD_CHAR.test(text[end] ?? '')
+    if (pick.start < at || text.slice(pick.start, end) !== pick.display || !whole) continue
+    body += text.slice(at, pick.start) + pick.token
+    at = end
+  }
+  return body + text.slice(at)
+}
+
+// Labels that more than one candidate shares get a detail (role, joined date) so the list tells them apart.
+export function withDetails<T extends MentionCandidate>(candidates: readonly T[], detailOf: (candidate: T) => string): (T & { detail?: string })[] {
+  const counts = new Map<string, number>()
+  for (const c of candidates) counts.set(c.label.toLocaleLowerCase(), (counts.get(c.label.toLocaleLowerCase()) ?? 0) + 1)
+  return candidates.map((c) => ((counts.get(c.label.toLocaleLowerCase()) ?? 0) > 1 ? { ...c, detail: detailOf(c) } : c))
 }

@@ -44,3 +44,10 @@ export function newMessageId(nowMs: number = Date.now()): string {
 export function messageIdTime(id: string): number {
   return Number.parseInt(id.slice(0, 8) + id.slice(9, 13), 16)
 }
+
+// The smallest message id of a millisecond: every newMessageId(t) with t >= ms is at least this (ids never run behind
+// their createdAt), so "created at or after ms" can use the (office_id, id) index.
+export function messageIdFloor(ms: number): string {
+  const hex = Math.max(Math.floor(ms), 0).toString(16).padStart(12, '0').slice(-12)
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-7000-8000-000000000000`
+}

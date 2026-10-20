@@ -31,6 +31,10 @@ export const ChatMessageSchema = z.object({
   createdAt: isoDate,
   // Not null: a tombstone. Show "Message deleted" in its place.
   deletedAt: isoDate.nullable(),
+  // For the one who receives it (the server sets it per recipient): it mentions them by id or as everyone, and no
+  // block stands between them and the author. Never for their own or a deleted message. Clients highlight, count and
+  // notify mentions by this flag, never by the tokens in the body.
+  mentionsYou: z.boolean(),
 })
 export type ChatMessage = z.infer<typeof ChatMessageSchema>
 
@@ -45,8 +49,8 @@ export type ChatSendResponse = z.infer<typeof ChatSendResponseSchema>
 export const CHAT_SEND_REJECT_REASONS = ['rate_limited', 'too_long', 'empty', 'muted', 'invalid'] as const
 export type ChatSendRejectReason = (typeof CHAT_SEND_REJECT_REASONS)[number]
 
-// Server to client 'chat:new': a new message, to every client in the room except its author's.
-// The client hides messages whose author is in its blocked list.
+// Server to client 'chat:new': a new message, to every client in the room except its author's, each with its own
+// mentionsYou. The client hides messages whose author is in its blocked list.
 
 // Request 'chat:delete' (the author, or an owner or admin). Soft delete: the row stays as a tombstone without
 // body. Success broadcasts 'chat:deleted' to every client.

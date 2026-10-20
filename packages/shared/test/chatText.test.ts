@@ -43,6 +43,19 @@ describe('renderSegments', () => {
     expect(renderSegments('HTTPS://A.Example/P')).toEqual([{ kind: 'link', text: 'HTTPS://A.Example/P', href: 'https://a.example/P' }])
   })
 
+  it('leaves links with a user name or password as text, so the shown host is the one that opens', () => {
+    for (const body of [
+      'https://accounts.google.com\u2215login@evil.example/x',
+      'https://accounts.google.com\u2044login@evil.example/x',
+      'https://accounts.google.com@evil.example/x',
+      'https://user:pass@evil.example/',
+      'http://:pass@evil.example/',
+    ]) {
+      expect(renderSegments(`see ${body}`)).toEqual([{ kind: 'text', text: `see ${body}` }])
+    }
+    expect(renderSegments('https://evil.example/a@b')[0]).toEqual({ kind: 'link', text: 'https://evil.example/a@b', href: 'https://evil.example/a@b' })
+  })
+
   it('leaves markup as text', () => {
     expect(renderSegments('<b>bold</b> <img src=x onerror=alert(1)>')).toEqual([
       { kind: 'text', text: '<b>bold</b> <img src=x onerror=alert(1)>' },

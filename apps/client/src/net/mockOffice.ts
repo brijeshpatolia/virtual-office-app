@@ -178,7 +178,10 @@ class MockOffice {
           if (result !== 'ok') throw rejected(result)
           this.chatDeleted.emit({ id })
         }),
-      markChatRead: (lastReadId) => this.chat.markRead(lastReadId),
+      markChatRead: (lastReadId) => {
+        this.chat.markRead(lastReadId)
+        return true
+      },
       onChatNew: (handler) => this.chatNew.on(handler),
       onChatDeleted: (handler) => this.chatDeleted.on(handler),
       onChatMuted: (handler) => this.chatMuted.on(handler),
@@ -214,6 +217,8 @@ class MockOffice {
           if (!this.chat.moderates(MOCK_OWN.userId, userId)) throw rejected('not_allowed')
           this.removePlayer(entry[0])
         }),
+      // The mock never changes the own role.
+      onRoleChanged: () => () => undefined,
     }
     Object.assign(window, {
       __voMock: {

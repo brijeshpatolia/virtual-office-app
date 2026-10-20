@@ -1,9 +1,10 @@
-import { useMemo } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { MeResponse, OfficeResponse } from '@vo/shared'
 import { createInviteLink, fetchOffice, listInviteLinks, revokeInviteLink } from '../api/endpoints.ts'
 import { isApiError } from '../api/http.ts'
 import { useResource } from '../hooks/useResource.ts'
 import { joinColyseusOffice } from '../net/colyseusLink.ts'
+import type { OfficeLink } from '../net/officeLink.ts'
 import { ErrorMessage, Message, SignedIn, signOut } from '../pages/common.tsx'
 import { useAccessToken, useOfficeConnection } from './hooks.ts'
 import { httpOfficeApi, type OfficeSelf } from './officeApi.ts'
@@ -31,9 +32,10 @@ function MemberOffice({ officeId, me }: { officeId: string; me: MeResponse }) {
 }
 
 function ConnectedOffice({ details, me }: { details: OfficeResponse; me: MeResponse }) {
-  const { office, role } = details
+  const { office } = details
   const getToken = useAccessToken(office.id)
   const [connection, reconnect] = useOfficeConnection(office.id, getToken, joinColyseusOffice)
+  const role = useCurrentRole(office.id, details.role, connection.kind === 'connected' ? connection.link : null)
   const invites = useMemo<InviteActions | null>(
     () =>
       role === 'owner' || role === 'admin'
@@ -52,7 +54,8 @@ function ConnectedOffice({ details, me }: { details: OfficeResponse; me: MeRespo
     () => ({ userId: me.user.id, name: me.user.name, role, orgId: office.orgId, officeId: office.id }),
     [me.user.id, me.user.name, role, office.orgId, office.id],
   )
-  const api = useMemo(() => httpOfficeApi(self), [self])
+  // Not on self: a role change must not start the chat over.
+  const api = useMemo(() => httpOfficeApi({ officeId: office.id, orgId: office.orgId }), [office.id, office.orgId])
 
   const leaveAndSignOut = (): void => {
     void signOut()
@@ -71,4 +74,30 @@ function ConnectedOffice({ details, me }: { details: OfficeResponse; me: MeRespo
       onReconnect={reconnect}
     />
   )
+}
+
+// The user's role, as it is now: from the page load, then from the room (role:changed), and read again with each new
+// connection (entering again after a kick or a lost connection), so what the page offers follows a role change.
+function useCurrentRole(officeId: string, initial: OfficeResponse['role'], link: OfficeLink | null): OfficeResponse['role'] {
+  const [role, setRole] = useState(initial)
+  const firstLink = useRef<OfficeLink | null>(null)
+  useEffect(() => {
+    if (link === null) return
+    let live = true
+    firstLink.current ??= link
+    if (firstLink.current !== link) {
+      fetchOffice(officeId).then(
+        (fresh) => {
+          if (live) setRole(fresh.role)
+        },
+        () => undefined,
+      )
+    }
+    const stop = link.onRoleChanged(({ role: next }) => setRole(next))
+    return () => {
+      live = false
+      stop()
+    }
+  }, [officeId, link])
+  return role
 }

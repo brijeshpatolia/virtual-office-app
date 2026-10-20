@@ -85,6 +85,21 @@ describe('status:set', () => {
     await again.leave()
   })
 
+  it('shows the newest status text after a quick leave and rejoin, while a write still waits', async () => {
+    const { orgId, ann, ben, join } = await office()
+    const b = await join(ben)
+    const a = await join(ann)
+    await setStatus(a, { status: 'available', statusText: 'A' })
+    await sleep(50)
+    await setStatus(a, { status: 'available', statusText: 'B' })
+    await a.leave()
+    const again = await join(ann)
+    expect(again.server().statusText).toBe('B')
+    await waitFor(() => b.room.state.players.get(again.sessionId)?.statusText === 'B', 'ben to see B')
+    expect((await t.services.prefs.get(orgId, ann.userId)).statusText).toBe('B')
+    await Promise.all([again.leave(), b.leave()])
+  })
+
   it('shows busy in a meeting room unless on DND, and away after idling', async () => {
     const { ann, join } = await office()
     const a = await join(ann)

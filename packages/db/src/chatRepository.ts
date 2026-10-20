@@ -1,5 +1,5 @@
-import { and, arrayContains, count, desc, eq, exists, getTableColumns, gt, gte, inArray, isNull, lt, ne, notInArray, or, sql } from 'drizzle-orm'
-import { newMessageId } from './id.ts'
+import { and, arrayContains, count, desc, eq, exists, getTableColumns, gt, gte, inArray, isNull, lt, ne, not, notInArray, or, sql, type SQL } from 'drizzle-orm'
+import { messageIdFloor, newMessageId } from './id.ts'
 import type { Db } from './index.ts'
 import { chatMentions, chatMessages, chatMutes, chatReadState, member, user, userPrefs } from './schema/index.ts'
 
@@ -9,6 +9,11 @@ export type UserPrefsRow = typeof userPrefs.$inferSelect
 export interface ChatMessageRecord extends ChatMessageRow {
   // The author's user row; the server shows displayName() of it.
   author: { name: string; email: string }
+}
+
+export interface ViewedChatMessageRecord extends ChatMessageRecord {
+  // The message mentions the viewer of the page (see mentionsViewer).
+  mentionsViewer: boolean
 }
 
 export interface NewChatMessage {
@@ -29,6 +34,8 @@ export interface ChatPageQuery {
   limit: number
   // Only messages created at or after this time (a guest's member.createdAt).
   since?: Date | null | undefined
+  // Who reads the page, for mentionsViewer (false for every row without one).
+  viewerId?: string | undefined
 }
 
 export interface UnreadQuery {
@@ -66,6 +73,42 @@ export function chatRepository(db: Db, orgId: string) {
   const record = { ...getTableColumns(chatMessages), author: { name: user.name, email: user.email } }
   const selectRecords = () => db.select(record).from(chatMessages).innerJoin(user, eq(user.id, chatMessages.authorId))
   const prefsKey = (userId: string) => and(eq(userPrefs.userId, userId), eq(userPrefs.orgId, orgId))
+  // created_at >= since, plus the same floor on the id, which the (office_id, id) index can use.
+  const createdSince = (since: Date | null | undefined) =>
+    since ? and(gte(chatMessages.id, messageIdFloor(since.getTime())), gte(chatMessages.createdAt, since)) : undefined
+  // A block between the viewer and the message's author, in either direction, as the prefs stand now.
+  const blockedWithAuthor = (viewerId: string) =>
+    exists(
+      db
+        .select({ one: sql`1` })
+        .from(userPrefs)
+        .where(
+          and(
+            eq(userPrefs.orgId, orgId),
+            or(
+              and(eq(userPrefs.userId, chatMessages.authorId), arrayContains(userPrefs.blockedUserIds, [viewerId])),
+              and(eq(userPrefs.userId, viewerId), sql`${chatMessages.authorId} = any(${userPrefs.blockedUserIds})`),
+            ),
+          ),
+        ),
+    )
+  // The message mentions the viewer: a mention row for them (current members, no block when it was sent) or
+  // everyone; never their own or a deleted message, and never across a block that stands now.
+  const mentionsViewer = (viewerId: string): SQL =>
+    and(
+      ne(chatMessages.authorId, viewerId),
+      isNull(chatMessages.deletedAt),
+      or(
+        eq(chatMessages.mentionsEveryone, true),
+        exists(
+          db
+            .select({ one: sql`1` })
+            .from(chatMentions)
+            .where(and(eq(chatMentions.messageId, chatMessages.id), eq(chatMentions.userId, viewerId))),
+        ),
+      ),
+      not(blockedWithAuthor(viewerId)),
+    ) ?? sql`false`
 
   const membersAmong = async (userIds: readonly string[]): Promise<string[]> => {
     if (userIds.length === 0) return []
@@ -161,15 +204,14 @@ export function chatRepository(db: Db, orgId: string) {
     },
 
     // Newest first (keyset paging on the id).
-    async listChatMessages(officeId: string, query: ChatPageQuery): Promise<ChatMessageRecord[]> {
-      return selectRecords()
-        .where(
-          and(
-            inOffice(officeId),
-            query.before === undefined ? undefined : lt(chatMessages.id, query.before),
-            query.since ? gte(chatMessages.createdAt, query.since) : undefined,
-          ),
-        )
+    async listChatMessages(officeId: string, query: ChatPageQuery): Promise<ViewedChatMessageRecord[]> {
+      const viewer = query.viewerId
+      const mentioned = viewer === undefined ? sql<boolean>`false` : sql<boolean>`(${mentionsViewer(viewer)})`
+      return db
+        .select({ ...record, mentionsViewer: mentioned })
+        .from(chatMessages)
+        .innerJoin(user, eq(user.id, chatMessages.authorId))
+        .where(and(inOffice(officeId), query.before === undefined ? undefined : lt(chatMessages.id, query.before), createdSince(query.since)))
         .orderBy(desc(chatMessages.id))
         .limit(query.limit)
     },
@@ -211,20 +253,12 @@ export function chatRepository(db: Db, orgId: string) {
       const unread = and(
         inOffice(officeId),
         lastReadId === null ? undefined : gt(chatMessages.id, lastReadId),
-        query.since ? gte(chatMessages.createdAt, query.since) : undefined,
+        createdSince(query.since),
         isNull(chatMessages.deletedAt),
         ne(chatMessages.authorId, userId),
         query.blockedUserIds.length > 0 ? notInArray(chatMessages.authorId, [...query.blockedUserIds]) : undefined,
       )
-      const mentionsMe = or(
-        eq(chatMessages.mentionsEveryone, true),
-        exists(
-          db
-            .select({ one: sql`1` })
-            .from(chatMentions)
-            .where(and(eq(chatMentions.messageId, chatMessages.id), eq(chatMentions.userId, userId))),
-        ),
-      )
+      const mentionsMe = mentionsViewer(userId)
       const capped = async (where: ReturnType<typeof and>): Promise<number> => {
         const page = db.select({ id: chatMessages.id }).from(chatMessages).where(where).limit(query.limit).as('page')
         const rows = await db.select({ n: count() }).from(page)

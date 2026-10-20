@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { EVERYONE_TOKEN, mentionToken, UNREAD_COUNT_LIMIT, unreadBadge } from '@vo/shared'
 import { idOf, message } from './testMessages.ts'
-import { addUnread, countsAsUnread, isReading, mentionsUser, NO_UNREAD, readTarget, removeUnread, shouldNotify, type NotifyInput } from './unread.ts'
+import { addUnread, countsAsUnread, isReading, NO_UNREAD, readTarget, removeUnread, shouldNotify, unreadAfter, type NotifyInput } from './unread.ts'
 
 const viewer = { userId: 'me', blocked: new Set(['troll']) }
 
@@ -13,12 +13,13 @@ describe('unread counts', () => {
     expect(countsAsUnread(message(1, { deletedAt: '2026-10-20T10:00:00.000Z' }), viewer)).toBe(false)
   })
 
-  it('counts mentions of the viewer and of everyone, and stops at the server limit', () => {
-    let counts = addUnread(NO_UNREAD, message(1, { body: `${mentionToken('me')} hi` }), viewer)
-    counts = addUnread(counts, message(2, { body: `${EVERYONE_TOKEN} lunch` }), viewer)
+  it("counts mentions by the server's mentionsYou only, and stops at the server limit", () => {
+    let counts = addUnread(NO_UNREAD, message(1, { body: `${mentionToken('me')} hi`, mentionsYou: true }), viewer)
+    counts = addUnread(counts, message(2, { body: `${EVERYONE_TOKEN} lunch`, mentionsYou: true }), viewer)
     counts = addUnread(counts, message(3, { body: `${mentionToken('someone')} hi` }), viewer)
-    expect(counts).toEqual({ count: 3, mentions: 2 })
-    expect(mentionsUser('@me typed by hand', 'me')).toBe(false)
+    // A mention across a block: the token is in the body, but the server says it does not mention the viewer.
+    counts = addUnread(counts, message(4, { body: `${mentionToken('me')} ${EVERYONE_TOKEN}`, mentionsYou: false }), viewer)
+    expect(counts).toEqual({ count: 4, mentions: 2 })
     let many = NO_UNREAD
     for (let i = 0; i < 150; i++) many = addUnread(many, message(i), viewer)
     expect(many.count).toBe(UNREAD_COUNT_LIMIT)
@@ -27,11 +28,25 @@ describe('unread counts', () => {
   })
 
   it('takes a deleted unread message off again, but not one already read', () => {
-    const mention = message(5, { body: `${mentionToken('me')} hi` })
+    const mention = message(5, { body: `${mentionToken('me')} hi`, mentionsYou: true })
     const counts = { count: 2, mentions: 1 }
     expect(removeUnread(counts, mention, viewer, idOf(4))).toEqual({ count: 1, mentions: 0 })
     expect(removeUnread(counts, mention, viewer, idOf(5))).toBe(counts)
     expect(removeUnread(NO_UNREAD, message(9), viewer, null)).toEqual(NO_UNREAD)
+  })
+})
+
+describe('unreadAfter', () => {
+  const list = [message(1), message(2, { mentionsYou: true }), message(3, { authorId: 'me' }), message(4)]
+  it('counts the loaded messages after the read state when they reach back to it', () => {
+    expect(unreadAfter(list, idOf(1), viewer, false)).toEqual({ count: 2, mentions: 1 })
+    expect(unreadAfter(list, idOf(4), viewer, false)).toEqual({ count: 0, mentions: 0 })
+  })
+
+  it('leaves it to the server when the loaded messages start after the read state', () => {
+    expect(unreadAfter(list.slice(2), idOf(1), viewer, false)).toBeNull()
+    expect(unreadAfter(list.slice(2), idOf(1), viewer, true)).toEqual({ count: 1, mentions: 0 })
+    expect(unreadAfter(list, null, viewer, true)).toBeNull()
   })
 })
 
@@ -54,7 +69,7 @@ describe('read state', () => {
 
 describe('shouldNotify', () => {
   const base: NotifyInput = {
-    message: message(1, { body: `${mentionToken('me')} got a minute?` }),
+    message: message(1, { body: `${mentionToken('me')} got a minute?`, mentionsYou: true }),
     viewer,
     chosenStatus: 'available',
     notifyMentions: true,
@@ -64,7 +79,7 @@ describe('shouldNotify', () => {
 
   it('notifies a mention while the tab is hidden', () => {
     expect(shouldNotify(base)).toBe(true)
-    expect(shouldNotify({ ...base, message: message(1, { body: `${EVERYONE_TOKEN} standup` }) })).toBe(true)
+    expect(shouldNotify({ ...base, message: message(1, { body: `${EVERYONE_TOKEN} standup`, mentionsYou: true }) })).toBe(true)
   })
 
   it('stays quiet on DND, when turned off, without permission, with the tab visible, for blocked authors and plain messages', () => {
@@ -76,5 +91,7 @@ describe('shouldNotify', () => {
     expect(shouldNotify({ ...base, message: { ...base.message, authorId: 'troll' } })).toBe(false)
     expect(shouldNotify({ ...base, message: { ...base.message, authorId: 'me' } })).toBe(false)
     expect(shouldNotify({ ...base, message: message(1) })).toBe(false)
+    // The blocked person: the author blocked them, so the server says no mention although the token is there.
+    expect(shouldNotify({ ...base, message: { ...base.message, mentionsYou: false } })).toBe(false)
   })
 })

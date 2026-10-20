@@ -8,17 +8,20 @@ import { shouldNotify } from './unread.ts'
 export const notificationPermission = (): NotificationPermission | 'unsupported' =>
   typeof Notification === 'undefined' ? 'unsupported' : Notification.permission
 
-// The chat of this office page: one model, attached to the room while connected.
+// The chat of this office page: one model, attached to the room while connected. Not before the block list is
+// loaded: until then nobody's messages show (social.prefsStatus), so a blocked person never flashes up.
 export function useChat(social: Social, reconnecting: boolean): { model: ChatModel; snapshot: ChatSnapshot } {
   const { api, self, link, blocked } = social
+  const prefsReady = social.prefsStatus === 'ready'
   const model = useMemo(() => new ChatModel({ api, selfId: self.userId }), [api, self.userId])
   useEffect(() => () => model.destroy(), [model])
   useEffect(() => model.setBlocked(blocked), [model, blocked])
-  useEffect(() => (link ? model.attach(link) : undefined), [model, link])
+  useEffect(() => (link && prefsReady ? model.attach(link) : undefined), [model, link, prefsReady])
 
-  // The SDK reconnected the same session: load what was missed.
+  // The connection dropped, and the SDK reconnected the same session: load what was missed.
   const wasReconnecting = useRef(reconnecting)
   useEffect(() => {
+    if (!wasReconnecting.current && reconnecting) model.dropped()
     if (wasReconnecting.current && !reconnecting) model.reconnected()
     wasReconnecting.current = reconnecting
   }, [model, reconnecting])

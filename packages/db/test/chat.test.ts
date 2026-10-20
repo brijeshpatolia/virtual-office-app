@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { createDb, forOrg, member, messageIdTime, newId, newMessageId, organization, user, type DbHandle } from '../src/index.ts'
+import { createDb, forOrg, member, messageIdFloor, messageIdTime, newId, newMessageId, organization, user, type DbHandle } from '../src/index.ts'
 
 let handle: DbHandle
 
@@ -36,6 +36,15 @@ describe('newMessageId', () => {
     expect(new Set(ids).size).toBe(ids.length)
     const now = Date.now()
     expect(messageIdTime(newMessageId(now))).toBe(now)
+  })
+
+  it('has a floor per millisecond below every id made at or after it', () => {
+    const now = Date.now() + 60_000
+    const floor = messageIdFloor(now)
+    expect(floor).toMatch(UUID)
+    expect(messageIdTime(floor)).toBe(now)
+    for (const id of [newMessageId(now), newMessageId(now), newMessageId(now + 1), newMessageId(now - 5)]) expect(id >= floor).toBe(true)
+    expect(messageIdFloor(now - 1) < floor).toBe(true)
   })
 })
 

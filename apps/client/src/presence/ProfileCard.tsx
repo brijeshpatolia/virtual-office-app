@@ -23,7 +23,7 @@ export function ProfileCard() {
 }
 
 function Card({ userId, onClose }: { userId: string; onClose: () => void }) {
-  const { members, players, self, link, blocked, setBlocked } = useSocial()
+  const { members, players, self, link, blocked, setBlocked, prefsStatus } = useSocial()
   const person = mergePeople(members, players, self.userId).find((p) => p.userId === userId)
   const card = useRef<HTMLElement>(null)
   const opener = useRef<Element | null>(null)
@@ -142,7 +142,14 @@ function Card({ userId, onClose }: { userId: string; onClose: () => void }) {
           Wave
         </button>
         {!person.self && (
-          <button type="button" style={isBlocked ? panelButtonStyle : dangerButtonStyle} onClick={toggleBlock} disabled={busy} data-testid="profile-block">
+          <button
+            type="button"
+            style={isBlocked ? panelButtonStyle : dangerButtonStyle}
+            onClick={toggleBlock}
+            // Until the block list is loaded, Block or Unblock could be the wrong one.
+            disabled={busy || prefsStatus !== 'ready'}
+            data-testid="profile-block"
+          >
             {isBlocked ? 'Unblock' : 'Block'}
           </button>
         )}

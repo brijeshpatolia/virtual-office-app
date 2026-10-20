@@ -92,10 +92,13 @@ function trimLink(raw: string): string {
 
 const count = (text: string, char: string): number => text.split(char).length - 1
 
+// A link with a user name or password before an '@' stays text: 'https://bank.example∕login@evil.example' would show
+// one host and open another.
 function httpUrl(text: string): string | null {
   try {
     const url = new URL(text)
-    return (url.protocol === 'http:' || url.protocol === 'https:') && url.hostname !== '' ? url.href : null
+    const web = url.protocol === 'http:' || url.protocol === 'https:'
+    return web && url.hostname !== '' && url.username === '' && url.password === '' ? url.href : null
   } catch {
     return null
   }

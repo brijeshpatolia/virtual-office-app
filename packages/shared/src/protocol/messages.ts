@@ -12,6 +12,7 @@ import type {
   ChatSendRequest,
   ChatSendResponse,
 } from './chat.ts'
+import { OrgRoleSchema } from './http.ts'
 import type {
   AdminKickRequest,
   AdminKickResponse,
@@ -81,6 +82,11 @@ export type StandRequest = z.infer<typeof StandRequestSchema>
 export const StandResponseSchema = z.object({ ok: z.literal(true), x: coord, y: coord })
 export type StandResponse = z.infer<typeof StandResponseSchema>
 
+// Server to client 'role:changed': the user's role in the company changed while in the office (the room checks once
+// a minute, and tells a reconnected client a change it missed). The client updates what it offers.
+export const RoleChangedSchema = z.object({ role: OrgRoleSchema })
+export type RoleChanged = z.infer<typeof RoleChangedSchema>
+
 // Chat, status, waves, blocks and moderation: schemas in chat.ts and presence.ts.
 export const MSG = {
   move: 'move',
@@ -100,6 +106,7 @@ export const MSG = {
   blockSet: 'block:set',
   adminMute: 'admin:mute',
   adminKick: 'admin:kick',
+  roleChanged: 'role:changed',
 } as const
 
 export interface ClientMessages {
@@ -115,6 +122,7 @@ export interface ServerMessages {
   [MSG.chatDeleted]: ChatDeleted
   [MSG.chatMuted]: ChatMuted
   [MSG.waveReceived]: WaveReceived
+  [MSG.roleChanged]: RoleChanged
 }
 
 export interface RoomRequests {

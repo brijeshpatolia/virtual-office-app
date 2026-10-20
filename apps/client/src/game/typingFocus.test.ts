@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { handOffKeyboard, isTypingElement, leaveTypingElement, type SceneKeyboard } from './typingFocus.ts'
+import { handOffKeyboard, isTypingElement, leaveFocusedElement, type SceneKeyboard } from './typingFocus.ts'
 
 describe('isTypingElement', () => {
   it('counts form fields and editable text, not buttons or the canvas', () => {
@@ -32,14 +32,16 @@ describe('handOffKeyboard', () => {
   })
 })
 
-describe('leaveTypingElement', () => {
-  it('blurs a focused field (a click on the map), and leaves buttons and the page alone', () => {
+describe('leaveFocusedElement', () => {
+  it('blurs whatever has the focus on a click on the map (a field, a button), and leaves the page alone', () => {
     const blurred: string[] = []
     const element = (tagName: string) => ({ tagName, isContentEditable: false, blur: () => blurred.push(tagName) })
-    leaveTypingElement({ activeElement: element('TEXTAREA') })
-    leaveTypingElement({ activeElement: element('BUTTON') })
-    leaveTypingElement({ activeElement: element('BODY') })
-    leaveTypingElement({ activeElement: null })
-    expect(blurred).toEqual(['TEXTAREA'])
+    leaveFocusedElement({ activeElement: element('TEXTAREA') })
+    leaveFocusedElement({ activeElement: element('BUTTON') })
+    leaveFocusedElement({ activeElement: element('CANVAS') })
+    leaveFocusedElement({ activeElement: element('BODY') })
+    leaveFocusedElement({ activeElement: element('HTML') })
+    leaveFocusedElement({ activeElement: null })
+    expect(blurred).toEqual(['TEXTAREA', 'BUTTON', 'CANVAS'])
   })
 })

@@ -4,6 +4,8 @@
 export interface ThrottledWriter<V> {
   push(key: string, value: V): void
   flush(): Promise<void>
+  // Writes what is pending for one key now (without waiting for the interval) and waits for it.
+  flushKey(key: string): Promise<void>
 }
 
 export const WRITE_INTERVAL_MS = 1000
@@ -53,6 +55,18 @@ export function createThrottledWriter<V>(options: {
       }
       entry.next = { value: entry.next !== null && options.merge ? options.merge(entry.next.value, value) : value }
       if (entry.writing === null && entry.timer === null) start(key, entry)
+    },
+
+    async flushKey(key) {
+      for (let entry = entries.get(key); entry !== undefined; entry = entries.get(key)) {
+        if (entry.timer !== null) {
+          clearTimeout(entry.timer)
+          entry.timer = null
+        }
+        if (entry.writing === null) start(key, entry)
+        if (entry.writing === null) return
+        await entry.writing
+      }
     },
 
     async flush() {

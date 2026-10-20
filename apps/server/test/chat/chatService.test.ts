@@ -61,7 +61,7 @@ describe('chat send', () => {
     const first = await say(scope, ann, ' hello ', clientMsgId)
     expect(first).toMatchObject({ ok: true, created: true, message: { body: 'hello', authorId: ann.userId, authorName: 'Ann', clientMsgId, deletedAt: null } })
     const retry = await say(scope, ann, 'changed', clientMsgId.toUpperCase())
-    expect(retry).toEqual({ ok: true, created: false, message: first.ok ? first.message : null })
+    expect(retry).toEqual({ ok: true, created: false, message: first.ok ? first.message : null, mentions: { userIds: [], everyone: false } })
 
     for (let i = 0; i < CHAT_RATE_LIMIT.messages - 1; i++) await sent(scope, ann, `more ${i}`)
     expect(reason(await say(scope, ann, 'again', clientMsgId))).toBe('ok')
@@ -101,7 +101,7 @@ describe('chat send', () => {
     expect(reason(await chat().send(scope, cy, { body: 'hi' } as never))).toBe('invalid')
   })
 
-  it('rejects a muted author with the end of the mute', async () => {
+  it('rejects a muted author with the end of the mute, which the unread counts tell too', async () => {
     const { company, scope } = await office()
     const admin = await company.join('Ada', 'admin')
     const bob = await company.join('Bob')
@@ -109,6 +109,8 @@ describe('chat send', () => {
     expect(muted.ok).toBe(true)
     const until = muted.ok ? muted.until : null
     expect(await say(scope, bob, 'hi')).toEqual({ ok: false, reason: 'muted', mutedUntil: until })
+    expect((await chat().unread(scope, bob)).mutedUntil).toBe(until?.toISOString())
+    expect((await chat().unread(scope, admin)).mutedUntil).toBeNull()
     t.clock.advance(15 * 60_000)
     expect(reason(await say(scope, bob, 'hi again'))).toBe('ok')
   })
@@ -135,6 +137,46 @@ describe('chat send', () => {
     expect(await mentions(dee)).toBe(0)
     expect(await mentions(eli)).toBe(0)
     expect(await mentions(ann)).toBe(0)
+  })
+
+  it('never counts a mention across a block in either direction, everyone included, as the blocks stand now', async () => {
+    const { company, scope } = await office()
+    const ann = await company.join('Ann')
+    const bob = await company.join('Bob')
+    const dee = await company.join('Dee')
+    await t.services.prefs.setBlocked(company.orgId, ann.userId, bob.userId, true)
+    const direct = await say(scope, ann, `hey ${mentionToken(bob.userId)}`)
+    const everyone = await say(scope, ann, '<!everyone> standup')
+    expect(direct).toMatchObject({ ok: true, mentions: { userIds: [], everyone: false } })
+    expect(everyone).toMatchObject({ ok: true, mentions: { userIds: [], everyone: true } })
+    // Bob (whom Ann blocked) still sees her messages, but neither mentions him; Dee is mentioned by the everyone.
+    expect(await chat().unread(scope, bob)).toMatchObject({ count: 2, mentions: 0 })
+    expect(await chat().unread(scope, dee)).toMatchObject({ count: 2, mentions: 1 })
+    const mentionsYou = async (m: Member) => (await chat().list(scope, m, { limit: 50 })).messages.map((x) => x.mentionsYou)
+    expect(await mentionsYou(bob)).toEqual([false, false])
+    expect(await mentionsYou(dee)).toEqual([true, false])
+    expect(await mentionsYou(ann)).toEqual([false, false])
+
+    // The other direction, and a block made after the message: Dee blocks Ann, and the everyone no longer counts.
+    await t.services.prefs.setBlocked(company.orgId, dee.userId, ann.userId, true)
+    expect(await chat().unread(scope, dee)).toMatchObject({ count: 0, mentions: 0 })
+    expect(await mentionsYou(dee)).toEqual([false, false])
+    // Unblocked: the everyone counts for Bob again; the direct mention got no mention row when it was sent.
+    await t.services.prefs.setBlocked(company.orgId, ann.userId, bob.userId, false)
+    expect(await mentionsYou(bob)).toEqual([true, false])
+  })
+
+  it('tells who of the people in the room a new message mentions', async () => {
+    const { company, scope } = await office()
+    const [ann, bob, cy, dee] = await Promise.all(['Ann', 'Bob', 'Cy', 'Dee'].map((name) => company.join(name)))
+    if (!ann || !bob || !cy || !dee) throw new Error('members')
+    await t.services.prefs.setBlocked(company.orgId, dee.userId, ann.userId, true)
+    const everyone = [ann, bob, cy, dee].map((m) => m.userId)
+    const among = (mentions: { userIds: string[]; everyone: boolean }) => chat().mentionedAmong(scope, ann.userId, mentions, everyone)
+    expect(await among({ userIds: [bob.userId], everyone: false })).toEqual(new Set([bob.userId]))
+    expect(await among({ userIds: [], everyone: true })).toEqual(new Set([bob.userId, cy.userId]))
+    expect(await among({ userIds: [dee.userId, ann.userId], everyone: false })).toEqual(new Set())
+    expect(await among({ userIds: [], everyone: false })).toEqual(new Set())
   })
 
   it("turns a guest's everyone token into text, and counts a member's for everyone", async () => {
@@ -193,7 +235,7 @@ describe('chat history', () => {
     expect(history.messages[0]?.deletedAt).not.toBeNull()
     expect(history.nextBefore).toBeNull()
     expect(await chat().list(scope, gus, { limit: 50, before: atJoin.id })).toEqual({ messages: [], nextBefore: null })
-    expect(await chat().unread(scope, gus)).toEqual({ count: 1, mentions: 0, lastReadId: null })
+    expect(await chat().unread(scope, gus)).toEqual({ count: 1, mentions: 0, lastReadId: null, mutedUntil: null })
     expect((await chat().list(scope, ann, { limit: 50 })).messages).toHaveLength(4)
   })
 
@@ -249,7 +291,7 @@ describe('read state and unread counts', () => {
     const ids = [await sent(scope, ann, 'a'), await sent(scope, ann, 'b'), await sent(scope, ann, 'c')].map((m) => m.id)
     await chat().markRead(scope, bob.userId, ids[1] ?? '')
     await chat().markRead(scope, bob.userId, ids[0] ?? '')
-    expect(await chat().unread(scope, bob)).toEqual({ count: 1, mentions: 0, lastReadId: ids[1] })
+    expect(await chat().unread(scope, bob)).toEqual({ count: 1, mentions: 0, lastReadId: ids[1], mutedUntil: null })
     await chat().markRead(scope, bob.userId, randomUUID())
     await chat().markRead(scope, bob.userId, 'not-a-uuid')
     const other = await office()
@@ -257,7 +299,7 @@ describe('read state and unread counts', () => {
     await chat().markRead(scope, bob.userId, (await sent(other.scope, zed, 'elsewhere')).id)
     expect((await chat().unread(scope, bob)).lastReadId).toBe(ids[1])
     await chat().markRead(scope, bob.userId, (ids[2] ?? '').toUpperCase())
-    expect(await chat().unread(scope, bob)).toEqual({ count: 0, mentions: 0, lastReadId: ids[2] })
+    expect(await chat().unread(scope, bob)).toEqual({ count: 0, mentions: 0, lastReadId: ids[2], mutedUntil: null })
   })
 
   it('counts the messages of others only, without blocked authors, up to the limit', async () => {
@@ -268,9 +310,9 @@ describe('read state and unread counts', () => {
     await sent(scope, ann, 'mine')
     await sent(scope, bob, `${mentionToken(ann.userId)} hi`)
     await sent(scope, cy, 'from Cy')
-    expect(await chat().unread(scope, ann)).toEqual({ count: 2, mentions: 1, lastReadId: null })
+    expect(await chat().unread(scope, ann)).toEqual({ count: 2, mentions: 1, lastReadId: null, mutedUntil: null })
     await t.services.prefs.setBlocked(company.orgId, ann.userId, cy.userId, true)
-    expect(await chat().unread(scope, ann)).toEqual({ count: 1, mentions: 1, lastReadId: null })
+    expect(await chat().unread(scope, ann)).toEqual({ count: 1, mentions: 1, lastReadId: null, mutedUntil: null })
 
     await seed(company, bob, 120)
     const capped = await chat().unread(scope, ann)
@@ -286,7 +328,7 @@ describe('tenant isolation', () => {
     const message = await sent(scope, ann, 'internal')
     const zed = await (await t.company('Rival')).join('Zed', 'owner')
     expect(await chat().list(scope, zed, { limit: 50 })).toEqual({ messages: [], nextBefore: null })
-    expect(await chat().unread(scope, zed)).toEqual({ count: 0, mentions: 0, lastReadId: null })
+    expect(await chat().unread(scope, zed)).toEqual({ count: 0, mentions: 0, lastReadId: null, mutedUntil: null })
     expect(reason(await say(scope, zed, 'hi'))).toBe('invalid')
     expect(await chat().delete(scope, zed, message.id)).toEqual({ ok: false, reason: 'not_allowed' })
     // The message's id under the rival company's own office finds nothing.

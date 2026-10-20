@@ -69,7 +69,7 @@ export function mockMessageId(ms: number): string {
   return `${time.slice(0, 8)}-${time.slice(8)}-7${hex(counter, 3)}-${variant}${random(3)}-${random(12)}`
 }
 
-interface StoredMessage extends ChatMessage {
+interface StoredMessage extends Omit<ChatMessage, 'mentionsYou'> {
   mentions: string[]
   everyone: boolean
 }
@@ -228,8 +228,14 @@ export class MockChatServer {
         !blocked.has(m.authorId) &&
         (this.lastReadId === null || compareIds(m.id, this.lastReadId) > 0),
     )
-    const mentions = after.filter((m) => m.everyone || m.mentions.includes(MOCK_OWN.userId)).length
-    return { count: Math.min(after.length, UNREAD_COUNT_LIMIT), mentions: Math.min(mentions, UNREAD_COUNT_LIMIT), lastReadId: this.lastReadId }
+    const mentions = after.filter((m) => this.mentionsOwn(m)).length
+    const muted = this.mutes.get(MOCK_OWN.userId) ?? 0
+    return {
+      count: Math.min(after.length, UNREAD_COUNT_LIMIT),
+      mentions: Math.min(mentions, UNREAD_COUNT_LIMIT),
+      lastReadId: this.lastReadId,
+      mutedUntil: muted > Date.now() ? new Date(muted).toISOString() : null,
+    }
   }
 
   private insert(authorId: string, authorName: string, body: string, clientMsgId: string, at: number): StoredMessage {
@@ -249,8 +255,15 @@ export class MockChatServer {
     return message
   }
 
-  private view({ id, clientMsgId, authorId, authorName, body, createdAt, deletedAt }: StoredMessage): ChatMessage {
-    return { id, clientMsgId, authorId, authorName, body, createdAt, deletedAt }
+  // As the server decides mentionsYou: by id or everyone, not own or deleted, and no block (the bots block nobody).
+  private mentionsOwn(m: StoredMessage): boolean {
+    const mentioned = m.everyone || m.mentions.includes(MOCK_OWN.userId)
+    return mentioned && m.authorId !== MOCK_OWN.userId && m.deletedAt === null && !this.prefs.blockedUserIds.includes(m.authorId)
+  }
+
+  private view(m: StoredMessage): ChatMessage {
+    const { id, clientMsgId, authorId, authorName, body, createdAt, deletedAt } = m
+    return { id, clientMsgId, authorId, authorName, body, createdAt, deletedAt, mentionsYou: this.mentionsOwn(m) }
   }
 }
 

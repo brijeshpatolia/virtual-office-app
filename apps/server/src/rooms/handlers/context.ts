@@ -17,6 +17,12 @@ export interface HandlerContext {
   // updates the effective status. null when the client has no session.
   setStatus(client: OfficeClient, chosen: ChosenStatus, statusText: string | undefined): Player | null
   broadcast<K extends keyof ServerMessages>(type: K, payload: ServerMessages[K], except?: OfficeClient): void
+  // The connected clients with their users, except one (not the sessions waiting for a dropped client).
+  recipients(except?: OfficeClient): { client: OfficeClient; userId: string }[]
+  // Awaited before a join reads the user's saved prefs (e.g. to write a status text that still waits).
+  beforeJoin(task: (userId: string) => Promise<void>): void
+  // Called when a user's session ends (leave, kick, a second tab, a reconnection that did not come).
+  onSessionEnd(task: (userId: string) => void): void
   // Ends the user's session with ROOM_CLOSE.kicked; false when the user is not in the room.
   kick(userId: string): boolean
   // Called (and awaited) when the room is disposed, e.g. to flush coalesced writes.

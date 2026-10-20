@@ -12,11 +12,16 @@ export function isTypingElement(target: unknown): boolean {
   )
 }
 
+const PAGE_TAGS = new Set(['BODY', 'HTML'])
+
 // A click on the map gives the keyboard back to it. Phaser prevents the default of a mousedown on the canvas, so
-// the browser would leave the focus in the chat input (and the arrow keys would move its caret, not the avatar).
-export function leaveTypingElement(doc: { activeElement: unknown } = document): void {
-  const active = doc.activeElement
-  if (isTypingElement(active)) (active as { blur?: () => void }).blur?.()
+// the browser would leave the focus where it was: in the chat input (the arrow keys would move its caret, not the
+// avatar) or on a button (Enter would press it instead of opening the chat). So whatever has the focus loses it.
+export function leaveFocusedElement(doc: { activeElement: unknown } = document): void {
+  const active = doc.activeElement as { tagName?: unknown; blur?: () => void } | null
+  if (active === null || typeof active !== 'object') return
+  if (typeof active.tagName === 'string' && PAGE_TAGS.has(active.tagName)) return
+  active.blur?.()
 }
 
 // Calls onChange(true) when focus moves into such an element and onChange(false) when it leaves it (also once now).

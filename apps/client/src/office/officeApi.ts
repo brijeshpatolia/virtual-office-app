@@ -22,7 +22,7 @@ export interface OfficeApi {
 
 const prefsOf = ({ statusText, blockedUserIds, notifyMentions }: UserPrefs): UserPrefs => ({ statusText, blockedUserIds, notifyMentions })
 
-export function httpOfficeApi(self: OfficeSelf): OfficeApi {
+export function httpOfficeApi(self: Pick<OfficeSelf, 'officeId' | 'orgId'>): OfficeApi {
   return {
     chatHistory: (before) => fetchChatHistory(self.officeId, before),
     chatUnread: () => fetchChatUnread(self.officeId),

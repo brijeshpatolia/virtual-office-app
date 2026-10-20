@@ -301,30 +301,36 @@ There are no Nearby or Room tabs yet (they need the media audiences of P3).
 
 - Send: the client sends `chat:send` with a `clientMsgId` (a UUID it makes) and the text. The room checks it and stores it, and only then sends `chat:new`
   to everyone else; the sender gets the stored message as the answer. A retry with the same `clientMsgId` (after a timeout or a reconnect) answers the
-  stored message again and sends nothing twice.
+  stored message again and sends nothing twice. Without an answer in 8 s the bar sends it again twice by itself, then shows **Retry**.
 - Limits: 1 to 2,000 characters after trimming (control characters and bidi overrides are dropped). At most 5 messages per person in any 10 seconds:
   the sixth is refused ("Slow down"), and **Retry** sends it once the window allows. The limit is kept in the memory of the one server process.
 - History: pages of 50, newest first, keyed by the message id (uuidv7, so ids sort by time). Scrolling up loads the next page above.
   Unread counts stop at 100; the badge shows 99+.
-- Text only: messages show as text, never as HTML. `http` and `https` links open in a new tab with `rel="noopener noreferrer"`.
+- Text only: messages show as text, never as HTML. `http` and `https` links open in a new tab with `rel="noopener noreferrer"`, with the address as
+  their title. A link with a user name or password before an `@` (`https://bank.example∕login@evil.example`) stays text: it would show one host and open another.
 - Mentions: type `@` and pick a person (or @everyone) from the list. The message stores the person's id (`<@userId>`), never the name, so a renamed
-  person or a look-alike name changes nothing. A mention counts only for current members, never for the author and never across a block.
+  person or a look-alike name changes nothing. Two people with the same name both show in the list (with their role, where they are and the end of their id), and each
+  pick keeps its own id; an edit inside a picked name turns it back into plain text. A mention counts only for current members, never for the author
+  and never across a block, in either direction (@everyone too, and also for a block made later): the server tells each reader whether a message
+  mentions them (`mentionsYou`), and the bar highlights, counts and notifies only by that. People you blocked are not in the list.
   Guests cannot mention everyone: their `<!everyone>` is stored as the plain text `@everyone`.
   While the tab is hidden, a mention shows a browser notification, if you allowed notifications and are not on DND.
 - Read state: while you see the newest message, the bar sends `chat:read` (at most once a second; the room writes at most once a second).
-  It only moves forward. Unread counts skip your own messages, deleted ones and people you blocked.
+  It only moves forward. Unread counts skip your own messages, deleted ones and people you blocked. A read the bar could not send while offline
+  goes out again after the reconnect, and the badge counts only what came after it. The room writes a waiting read when you leave.
 - Guests see only the messages sent after they joined the company, in the history and in the unread counts.
 - Delete: the author, or an owner or admin, deletes a message for everyone. The text is cleared and the row stays ("Message deleted").
 - Mute: owners and admins mute someone with a lower role in the profile card, for 15 minutes, 1 hour, 24 hours or 7 days, or unmute them.
-  A mute holds in every office of the company. The muted person is told at once and their messages are refused until it ends.
+  A mute holds in every office of the company. The muted person is told at once (and, after a reconnect or a reload, with the unread counts) and
+  their messages are refused until it ends. The bar never refuses by itself: the server decides, so an unmute it did not hear of still lets a message through.
 - Kick: closes the person's connection to the office (close code 4103, "Removed from the office"). They stay a member and can enter again at once.
 - Mutes, unmutes, kicks and deleting someone else's message go to the audit log, without message text.
 - Retention: messages are kept until they are deleted, or until the company or the author's account is deleted. A retention setting per company is not built yet.
 
 | Route                                        | Who                                 | Answer                                                      |
 | -------------------------------------------- | ----------------------------------- | ----------------------------------------------------------- |
-| `GET /api/offices/:id/chat?before=&limit=`   | members and guests                  | Up to 50 messages, newest first, and `nextBefore` for the next page. |
-| `GET /api/offices/:id/chat/unread`           | members and guests                  | `count`, `mentions` and `lastReadId`.                        |
+| `GET /api/offices/:id/chat?before=&limit=`   | members and guests                  | Up to 50 messages, newest first (each with your `mentionsYou`), and `nextBefore` for the next page. |
+| `GET /api/offices/:id/chat/unread`           | members and guests                  | `count`, `mentions`, `lastReadId` and your `mutedUntil`.     |
 | `GET /api/offices/:id/members`               | owners, admins and members (403 for guests) | The members with their role, oldest first.          |
 | `GET` and `PUT /api/me/prefs?orgId=`         | members and guests of that company  | Your status text, block list and mention notification setting. |
 
@@ -340,7 +346,11 @@ Everyone outside the office's company gets 404, as for the other office routes.
 - Wave (profile card): the other person sees "Ann waved at you". At most 3 waves per 30 s, and 1 per person per 10 s; never to someone on DND.
 - Block (profile card): you no longer see the person's messages (they fold into "1 message from a blocked person"), and no waves or mentions go between
   the two of you, in either direction. In P3 a block also removes them from your audio and video. They are not told.
+  The chat waits for your block list: until it has loaded (a failed load is tried again, with a note in the bar), it shows no messages and sends no
+  notifications, and Block waits too.
 - **People**: the company's members, online first with their status, then offline. Guests see only the people in the office now.
+- A role change (by an owner or admin) reaches the page within a minute (`role:changed`, also after a reconnect), and a new connection reads the role
+  again, so Mute, Kick, deleting others' messages, @everyone and **People** follow it. The server checks the role for every action anyway.
 - Privacy promises: no analytics or tracking scripts, no activity reports, no "time online" charts and no recording. The `presence_sessions` rows only
   count who is in an office (for billing later). Your block list and settings are yours: the server shows them to nobody else.
   The server stores your status text, block list, mention notification setting and how far you read the chat.
@@ -357,7 +367,8 @@ Everyone outside the office's company gets 404, as for the other office routes.
 | Esc                         | Chat input, panels     | Back to the map; closes the open panel or card.                       |
 | `` ` `` (the key left of 1) | Map                    | Show or hide the map debug overlay.                                   |
 
-While a field has the focus (the chat, the status text, a select), no key moves the avatar. A click on the map gives the keys back to the map.
+While a field has the focus (the chat, the status text, a select), no key moves the avatar. A click on the map gives the keys back to the map; it also
+takes the focus from a button, so Enter then opens the chat.
 
 ## Tests
 
@@ -381,12 +392,14 @@ send through the room with the Colyseus SDK in Node (5 messages each, within the
 - Bob sees Ann's message live (the one-line bar with the unread badge, then the open bar; the link opens in a new tab with `noopener noreferrer`),
   and a mention picked from the list is stored as Bob's id. After a reload he sees the newest 50, and scrolling up pages back to the start:
   no gaps, no duplicates, in the server's order.
-- Typing `wasd e` and holding the arrow keys in the chat input moves Ann's avatar neither on her page nor on the server; after Esc the arrow keys walk again.
+  Closed while scrolled up and opened again with Enter on the map, Bob's list is at the newest message and a new one counts as read.
+- After a click on a button and then on the map, Enter opens Ann's chat. Typing `wasd e` and holding the arrow keys in the chat input moves her avatar
+  neither on her page nor on the server; after Esc the arrow keys walk again.
 - Ann's sixth message within 10 s is refused with "Slow down", and **Retry** sends it after the window.
 - A guest sees none of the earlier messages (bar, history and unread), sees a later one live and after a reload, cannot mention everyone and cannot list the members.
 - Ann's status text reaches Bob; she shows as busy in the meeting room; on DND no wave reaches her; Bob blocks her: her messages fold away,
-  her mention of him does not count, and her wave does not reach him.
-- Ann mutes Bob: his bar and, after a reload, the server refuse his message; unmuted, **Retry** sends it; Ann deletes it for everyone;
+  her mention of him does not count, and her wave does not reach him; Ann is not in his mention list, and a token he types does not mention her.
+- Ann mutes Bob: the server refuses his message, and after a reload his bar shows the mute again; unmuted, **Retry** sends it; Ann deletes it for everyone;
   she kicks Bob, he sees "Removed from the office" and enters again.
 
 The doorways leave the avatar only 12 px of room, and headless Chromium with software rendering draws few frames, so a key goes up a frame or two late.

@@ -1,10 +1,18 @@
-import { CHAT_MAX_LENGTH, normalizeChatBody, rejectReason, type ChatMessage, type ChatMuted } from '@vo/shared'
+import {
+  CHAT_MAX_LENGTH,
+  normalizeChatBody,
+  rejectReason,
+  type ChatHistoryResponse,
+  type ChatMessage,
+  type ChatMuted,
+  type ChatUnreadResponse,
+} from '@vo/shared'
 import { errorMessage } from '../api/http.ts'
-import type { OfficeLink, Unsubscribe } from '../net/officeLink.ts'
+import { isRequestTimeout, type OfficeLink, type Unsubscribe } from '../net/officeLink.ts'
 import type { OfficeApi } from '../office/officeApi.ts'
-import { deleteRejectText, OFFLINE_TEXT, sendRejectText } from './format.ts'
+import { deleteRejectText, NO_ANSWER_TEXT, OFFLINE_TEXT, sendRejectText } from './format.ts'
 import { compareIds, EMPTY_HISTORY, mergeMessages, withDeleted, withNewestPage, withOlderPage, type ChatHistory } from './messages.ts'
-import { addUnread, NO_UNREAD, readTarget, removeUnread, type ChatViewer, type UnreadCounts } from './unread.ts'
+import { addUnread, NO_UNREAD, readTarget, removeUnread, unreadAfter, type ChatViewer, type UnreadCounts } from './unread.ts'
 
 export interface PendingMessage {
   clientMsgId: string
@@ -12,7 +20,7 @@ export interface PendingMessage {
   createdAt: string
   status: 'sending' | 'failed'
   error: string | null
-  // It failed for lack of a connection: sent again (same clientMsgId) once the connection is back.
+  // It failed for lack of a connection (or of an answer): sent again (same clientMsgId) once the connection is back.
   retryOnReconnect: boolean
 }
 
@@ -38,6 +46,12 @@ export interface ChatModelDeps {
 
 // chat:read goes out at most once per this many ms (the last id wins).
 export const READ_THROTTLE_MS = 1000
+// A chat:send without an answer in time (the server may have stored it) goes out again with its clientMsgId this
+// many times, after SEND_RETRY_MS and then twice that, before it shows as not confirmed.
+export const SEND_RETRIES = 2
+export const SEND_RETRY_MS = 1500
+// How many chat:deleted ids of messages that are not loaded are kept: a page on its way then shows them deleted.
+const DELETED_MEMORY = 200
 
 const INITIAL: ChatSnapshot = {
   history: EMPTY_HISTORY,
@@ -71,6 +85,12 @@ export class ChatModel {
   private queuedRead: string | null = null
   private readCooldown: (() => void) | null = null
   private muteTimer: (() => void) | null = null
+  private muteVersion = 0
+  // Set when the connection is lost: the newest message loaded until then. Messages that come in after it may sit
+  // above a hole, so the next newest page is checked against this one.
+  private staleAnchor: { id: string | null } | null = null
+  // chat:deleted for messages that are not in the history (id -> deletedAt).
+  private readonly deletedUnknown = new Map<string, string>()
 
   constructor(deps: ChatModelDeps) {
     this.deps = {
@@ -106,8 +126,17 @@ export class ChatModel {
     this.retryOffline()
     return () => {
       for (const unsubscribe of subscriptions) unsubscribe()
-      if (this.link === link) this.link = null
+      if (this.link === link) {
+        this.link = null
+        this.dropped()
+      }
     }
+  }
+
+  // The connection dropped (the SDK tries to reconnect): nothing that is sent meanwhile reaches this client.
+  dropped(): void {
+    const { history } = this.snapshot
+    this.staleAnchor ??= { id: history.loaded ? (history.messages.at(-1)?.id ?? null) : null }
   }
 
   // The SDK reconnected the same session: messages sent meanwhile are not replayed, so load the newest page again.
@@ -139,22 +168,28 @@ export class ChatModel {
     this.markReadIfReading()
   }
 
+  // The newest page, the unread counts and the own mute, from the server.
   async refresh(): Promise<void> {
     const request = ++this.unreadRequest
+    const muteVersion = this.muteVersion
+    const stale = this.staleAnchor
+    const anchor = stale ? stale.id : (this.snapshot.history.messages.at(-1)?.id ?? null)
     try {
       const [page, unread] = await Promise.all([this.deps.api.chatHistory(), this.deps.api.chatUnread()])
+      if (this.staleAnchor === stale) this.staleAnchor = null
       this.update((s) => {
-        const history = withNewestPage(s.history, page)
-        const fresh = request === this.unreadRequest
+        const history = withNewestPage(s.history, this.withTombstones(page), anchor)
         return {
           ...s,
           history,
           pending: this.withoutStored(s.pending, history.messages),
           loadError: null,
-          unread: fresh ? { count: unread.count, mentions: unread.mentions } : s.unread,
+          unread: request === this.unreadRequest ? this.unreadFrom(unread, history, s.lastReadId) : s.unread,
           lastReadId: later(s.lastReadId, unread.lastReadId),
         }
       })
+      // A mute or an unmute that happened while this client was not connected.
+      if (muteVersion === this.muteVersion && unread.mutedUntil !== this.snapshot.mutedUntil) this.applyMuted({ until: unread.mutedUntil })
       // A chat:read that was dropped while offline.
       const local = this.snapshot.lastReadId
       if (local !== null && later(local, unread.lastReadId) !== unread.lastReadId) this.queueRead(local)
@@ -170,7 +205,7 @@ export class ChatModel {
     if (loadingOlder || !history.loaded || before === null) return
     this.update((s) => ({ ...s, loadingOlder: true }))
     try {
-      const page = await this.deps.api.chatHistory(before)
+      const page = this.withTombstones(await this.deps.api.chatHistory(before))
       // A newer page may have replaced the list meanwhile (after a gap); then this page no longer fits.
       this.update((s) => (s.history.nextBefore === before ? { ...s, history: withOlderPage(s.history, page), loadError: null } : s))
     } catch (error) {
@@ -231,7 +266,7 @@ export class ChatModel {
     return { userId: this.deps.selfId, blocked: this.blocked }
   }
 
-  private deliver(clientMsgId: string): void {
+  private deliver(clientMsgId: string, attempt = 0): void {
     const pending = this.snapshot.pending.find((p) => p.clientMsgId === clientMsgId)
     if (!pending) return
     const link = this.link
@@ -243,8 +278,14 @@ export class ChatModel {
       (message) => this.store(message),
       (error: unknown) => {
         const reason = rejectReason(error)
+        // No answer on an open connection: it may be stored, and a retry with the same clientMsgId is safe.
+        if (reason === null && isRequestTimeout(error) && attempt < SEND_RETRIES) {
+          this.deps.setTimer(() => this.deliver(clientMsgId, attempt + 1), SEND_RETRY_MS * 2 ** attempt)
+          return
+        }
         if (reason === null) {
-          this.patchPending(clientMsgId, { status: 'failed', error: OFFLINE_TEXT, retryOnReconnect: true })
+          const text = isRequestTimeout(error) ? NO_ANSWER_TEXT : OFFLINE_TEXT
+          this.patchPending(clientMsgId, { status: 'failed', error: text, retryOnReconnect: true })
           return
         }
         const text = sendRejectText(reason, this.snapshot.mutedUntil)
@@ -259,7 +300,8 @@ export class ChatModel {
   }
 
   // The answer to our own chat:send.
-  private store(message: ChatMessage): void {
+  private store(answer: ChatMessage): void {
+    const message = this.tombstoned(answer)
     this.update((s) => {
       const messages = mergeMessages(s.history.messages, [message])
       return { ...s, history: { ...s.history, messages }, pending: this.withoutStored(s.pending, messages) }
@@ -267,7 +309,8 @@ export class ChatModel {
     this.markReadIfReading()
   }
 
-  private receive(message: ChatMessage): void {
+  private receive(incoming: ChatMessage): void {
+    const message = this.tombstoned(incoming)
     const known = this.snapshot.history.messages.some((m) => m.id === message.id)
     this.update((s) => {
       const messages = mergeMessages(s.history.messages, [message])
@@ -279,7 +322,7 @@ export class ChatModel {
         unread: known || read || this.reading ? s.unread : addUnread(s.unread, message, this.viewer),
       }
     })
-    if (!known && message.authorId !== this.deps.selfId && !this.blocked.has(message.authorId)) {
+    if (!known && message.deletedAt === null && message.authorId !== this.deps.selfId && !this.blocked.has(message.authorId)) {
       for (const handler of [...this.incoming]) handler(message)
     }
     this.markReadIfReading()
@@ -288,6 +331,15 @@ export class ChatModel {
   private applyDeleted(id: string): void {
     const message = this.snapshot.history.messages.find((m) => m.id === id)
     const at = new Date(this.deps.now()).toISOString()
+    if (!message) {
+      // Not loaded (yet): a page on its way must not bring the text back, and the counts may include it.
+      this.deletedUnknown.delete(id)
+      this.deletedUnknown.set(id, at)
+      if (this.deletedUnknown.size > DELETED_MEMORY) this.deletedUnknown.delete(this.deletedUnknown.keys().next().value ?? '')
+      const read = this.snapshot.lastReadId
+      if (read === null || compareIds(id, read) > 0) void this.refreshUnread()
+      return
+    }
     this.update((s) => ({
       ...s,
       history: { ...s.history, messages: withDeleted(s.history.messages, id, at) },
@@ -296,6 +348,7 @@ export class ChatModel {
   }
 
   private applyMuted({ until }: ChatMuted): void {
+    this.muteVersion += 1
     this.muteTimer?.()
     this.muteTimer = null
     this.setMutedUntil(until)
@@ -325,16 +378,46 @@ export class ChatModel {
     if (this.readCooldown === null) this.flushRead()
   }
 
+  // A read the link could not send (offline) stays queued; the next refresh sends it.
   private flushRead(): void {
     const id = this.queuedRead
     const link = this.link
-    if (id === null || link === null) return
+    if (id === null || link === null || !link.markChatRead(id)) return
     this.queuedRead = null
-    link.markChatRead(id)
     this.readCooldown = this.deps.setTimer(() => {
       this.readCooldown = null
       this.flushRead()
     }, READ_THROTTLE_MS)
+  }
+
+  // Only the counts (after a delete of a message that is not loaded).
+  private async refreshUnread(): Promise<void> {
+    const request = ++this.unreadRequest
+    try {
+      const unread = await this.deps.api.chatUnread()
+      if (request !== this.unreadRequest) return
+      this.update((s) => ({ ...s, unread: this.unreadFrom(unread, s.history, s.lastReadId), lastReadId: later(s.lastReadId, unread.lastReadId) }))
+      this.markReadIfReading()
+    } catch {
+      // The counts stay as they are until the next refresh.
+    }
+  }
+
+  // The server's counts, unless it has not heard of the newest read yet (a chat:read dropped while offline, or one
+  // that waits for the server's write interval): then from the loaded messages, when they reach back to it.
+  private unreadFrom(unread: ChatUnreadResponse, history: ChatHistory, localRead: string | null): UnreadCounts {
+    const server = { count: unread.count, mentions: unread.mentions }
+    const ahead = localRead !== null && (unread.lastReadId === null || compareIds(localRead, unread.lastReadId) > 0)
+    return (ahead && unreadAfter(history.messages, localRead, this.viewer, history.nextBefore === null)) || server
+  }
+
+  private tombstoned(message: ChatMessage): ChatMessage {
+    const at = this.deletedUnknown.get(message.id)
+    return at === undefined || message.deletedAt !== null ? message : { ...message, body: '', deletedAt: at, mentionsYou: false }
+  }
+
+  private withTombstones(page: ChatHistoryResponse): ChatHistoryResponse {
+    return this.deletedUnknown.size === 0 ? page : { ...page, messages: page.messages.map((m) => this.tombstoned(m)) }
   }
 
   private withoutStored(pending: readonly PendingMessage[], messages: readonly ChatMessage[]): readonly PendingMessage[] {

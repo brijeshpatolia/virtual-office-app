@@ -27,7 +27,7 @@ describe('mergeMessages', () => {
 
 describe('history pages', () => {
   it('pages back without gaps or duplicates and stops at the oldest message', () => {
-    let history = withNewestPage(EMPTY_HISTORY, page(51, 100, 51))
+    let history = withNewestPage(EMPTY_HISTORY, page(51, 100, 51), null)
     expect(history).toMatchObject({ loaded: true, nextBefore: idOf(51) })
     history = withOlderPage(history, page(1, 50, null))
     expect(ids(history.messages)).toEqual(Array.from({ length: 100 }, (_, i) => i + 1))
@@ -35,22 +35,40 @@ describe('history pages', () => {
   })
 
   it('merges a newest page that overlaps what is loaded (after a short drop) and keeps the cursor', () => {
-    const before = withOlderPage(withNewestPage(EMPTY_HISTORY, page(51, 100, 51)), page(1, 50, null))
-    const after = withNewestPage(before, page(61, 110, 61))
+    const before = withOlderPage(withNewestPage(EMPTY_HISTORY, page(51, 100, 51), null), page(1, 50, null))
+    const after = withNewestPage(before, page(61, 110, 61), idOf(100))
     expect(ids(after.messages)).toEqual(Array.from({ length: 110 }, (_, i) => i + 1))
     expect(after.nextBefore).toBeNull()
   })
 
   it('drops the loaded messages when the newest page leaves a gap (more than a page missed)', () => {
-    const before = withNewestPage(EMPTY_HISTORY, page(51, 100, 51))
-    const after = withNewestPage(before, page(151, 200, 151))
+    const before = withNewestPage(EMPTY_HISTORY, page(51, 100, 51), null)
+    const after = withNewestPage(before, page(151, 200, 151), idOf(100))
     expect(ids(after.messages)).toEqual(Array.from({ length: 50 }, (_, i) => i + 151))
     expect(after.nextBefore).toBe(idOf(151))
   })
 
+  it('finds the gap from the anchor, not from a message that came in during the reload', () => {
+    // 1..120 loaded, 121..200 missed while offline; 201 (live, or the answer to an own message) lands first.
+    const loaded = withOlderPage(withNewestPage(EMPTY_HISTORY, page(71, 120, 71), null), page(21, 70, 21))
+    const withLive = { ...loaded, messages: mergeMessages(loaded.messages, [message(201)]) }
+    const after = withNewestPage(withLive, page(152, 201, 152), idOf(120))
+    expect(ids(after.messages)).toEqual(Array.from({ length: 50 }, (_, i) => i + 152))
+    expect(after.nextBefore).toBe(idOf(152))
+    const paged = withOlderPage(after, page(102, 151, 102))
+    expect(ids(paged.messages)).toEqual(Array.from({ length: 100 }, (_, i) => i + 102))
+  })
+
+  it('takes the cursor of the page when nothing was loaded before', () => {
+    const empty = withNewestPage(EMPTY_HISTORY, { messages: [], nextBefore: null }, null)
+    const after = withNewestPage(empty, page(11, 60, 11), null)
+    expect(after.nextBefore).toBe(idOf(11))
+    expect(ids(after.messages)).toHaveLength(50)
+  })
+
   it('keeps live messages that arrived before the first page', () => {
     const live = { ...EMPTY_HISTORY, messages: mergeMessages([], [message(101)]) }
-    const loaded = withNewestPage(live, page(52, 101, 52))
+    const loaded = withNewestPage(live, page(52, 101, 52), null)
     expect(ids(loaded.messages)).toEqual(Array.from({ length: 50 }, (_, i) => i + 52))
   })
 

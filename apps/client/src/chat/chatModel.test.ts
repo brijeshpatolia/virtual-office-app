@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { mentionToken, type ChatHistoryResponse, type ChatMessage, type ChatSendRequest, type ChatUnreadResponse } from '@vo/shared'
-import type { OfficeLink } from '../net/officeLink.ts'
-import { ChatModel, READ_THROTTLE_MS } from './chatModel.ts'
+import { RequestTimeoutError, type OfficeLink } from '../net/officeLink.ts'
+import { ChatModel, READ_THROTTLE_MS, SEND_RETRIES, SEND_RETRY_MS } from './chatModel.ts'
+import { NO_ANSWER_TEXT } from './format.ts'
 import { idOf, message, numberOf } from './testMessages.ts'
 
 const rejected = (reason: string): Error => Object.assign(new Error('request rejected'), { name: 'rejected', reason })
@@ -16,6 +17,7 @@ function fakeLink() {
   }
   const sends: ChatSendRequest[] = []
   const reads: string[] = []
+  const connection = { open: true }
   let answer: (request: ChatSendRequest) => Promise<ChatMessage> = async (request) => message(900, { authorId: 'me', clientMsgId: request.clientMsgId, body: request.body })
   const link = {
     sendChat: (request: ChatSendRequest) => {
@@ -23,7 +25,7 @@ function fakeLink() {
       return answer(request)
     },
     deleteChat: async () => undefined,
-    markChatRead: (id: string) => reads.push(id),
+    markChatRead: (id: string) => connection.open && reads.push(id) > 0,
     onChatNew: (h: (m: ChatMessage) => void) => (handlers.new.push(h), () => undefined),
     onChatDeleted: (h: (d: { id: string }) => void) => (handlers.deleted.push(h), () => undefined),
     onChatMuted: (h: (m: { until: string | null }) => void) => (handlers.muted.push(h), () => undefined),
@@ -32,6 +34,7 @@ function fakeLink() {
     link,
     sends,
     reads,
+    connection,
     answerWith: (next: typeof answer) => (answer = next),
     push: (m: ChatMessage) => handlers.new.forEach((h) => h(m)),
     deleted: (id: string) => handlers.deleted.forEach((h) => h({ id })),
@@ -39,7 +42,23 @@ function fakeLink() {
   }
 }
 
-function setup(pages: ChatHistoryResponse[] = [{ messages: [], nextBefore: null }], unread: ChatUnreadResponse = { count: 0, mentions: 0, lastReadId: null }) {
+type Page = ChatHistoryResponse | Promise<ChatHistoryResponse>
+
+// A page that the test hands out when it wants (to land something while a request is on its way).
+function held(): { page: Promise<ChatHistoryResponse>; release: (page: ChatHistoryResponse) => void } {
+  let release: (page: ChatHistoryResponse) => void = () => undefined
+  const page = new Promise<ChatHistoryResponse>((resolve) => (release = resolve))
+  return { page, release }
+}
+
+// Messages from..to as the server pages them: newest first.
+const range = (from: number, to: number, nextBefore: number | null): ChatHistoryResponse => ({
+  messages: Array.from({ length: to - from + 1 }, (_, i) => message(to - i)),
+  nextBefore: nextBefore === null ? null : idOf(nextBefore),
+})
+
+function setup(pages: Page[] = [{ messages: [], nextBefore: null }], counts: Partial<ChatUnreadResponse> = {}) {
+  const server = { unread: { count: 0, mentions: 0, lastReadId: null, mutedUntil: null, ...counts } as ChatUnreadResponse }
   const timers: Array<{ run: () => void; at: number; live: boolean }> = []
   let now = 1_000
   const requests: Array<string | undefined> = []
@@ -48,9 +67,9 @@ function setup(pages: ChatHistoryResponse[] = [{ messages: [], nextBefore: null 
     api: {
       chatHistory: async (before) => {
         requests.push(before)
-        return pages.shift() ?? { messages: [], nextBefore: null }
+        return (await pages.shift()) ?? { messages: [], nextBefore: null }
       },
-      chatUnread: async () => unread,
+      chatUnread: async () => server.unread,
     },
     selfId: 'me',
     newClientMsgId: () => `00000000-0000-4000-8000-${String(++ids).padStart(12, '0')}`,
@@ -68,7 +87,7 @@ function setup(pages: ChatHistoryResponse[] = [{ messages: [], nextBefore: null 
       timer.run()
     }
   }
-  return { model, requests, advance }
+  return { model, requests, advance, server }
 }
 
 describe('ChatModel sending', () => {
@@ -170,8 +189,8 @@ describe('ChatModel unread and read state', () => {
     model.attach(fake.link)
     await flush()
     expect(model.getSnapshot().unread).toEqual({ count: 1, mentions: 0 })
-    fake.push(message(2, { body: `${mentionToken('me')} hi` }))
-    fake.push(message(2, { body: `${mentionToken('me')} hi` }))
+    fake.push(message(2, { body: `${mentionToken('me')} hi`, mentionsYou: true }))
+    fake.push(message(2, { body: `${mentionToken('me')} hi`, mentionsYou: true }))
     fake.push(message(3, { authorId: 'me' }))
     expect(model.getSnapshot().unread).toEqual({ count: 2, mentions: 1 })
 
@@ -239,5 +258,134 @@ describe('ChatModel history', () => {
     expect(list).toEqual(Array.from({ length: 100 }, (_, i) => i + 1))
     await model.loadOlder()
     expect(requests).toHaveLength(2)
+  })
+})
+
+describe('ChatModel after a lost connection', () => {
+  it('leaves no hole when a live message lands before the newest page after a reconnect', async () => {
+    const reload = held()
+    const { model } = setup([range(71, 120, 71), reload.page])
+    const fake = fakeLink()
+    model.attach(fake.link)
+    await flush()
+    // 121..200 are sent while the connection is down; after the reconnect 201 comes live before the page.
+    model.dropped()
+    model.reconnected()
+    fake.push(message(201))
+    reload.release(range(152, 201, 152))
+    await flush()
+    const { history } = model.getSnapshot()
+    expect(history.messages.map((m) => numberOf(m.id))).toEqual(Array.from({ length: 50 }, (_, i) => i + 152))
+    expect(history.nextBefore).toBe(idOf(152))
+  })
+
+  it('leaves no hole when the answer to a message sent offline lands first, on a new connection', async () => {
+    const reload = held()
+    const { model } = setup([range(71, 120, 71), reload.page])
+    const first = fakeLink()
+    const detach = model.attach(first.link)
+    await flush()
+    detach()
+    model.send('typed while away')
+    const second = fakeLink()
+    second.answerWith(async (request) => message(201, { authorId: 'me', clientMsgId: request.clientMsgId, body: request.body }))
+    model.attach(second.link)
+    await flush()
+    reload.release(range(152, 201, 152))
+    await flush()
+    const { history, pending } = model.getSnapshot()
+    expect(pending).toEqual([])
+    expect(history.messages.map((m) => numberOf(m.id))).toEqual(Array.from({ length: 50 }, (_, i) => i + 152))
+    expect(history.nextBefore).toBe(idOf(152))
+  })
+
+  it('takes the mute state of the server at a reconnect (an unmute it did not hear of)', async () => {
+    const { model, server } = setup([range(1, 3, null), range(1, 3, null)])
+    const fake = fakeLink()
+    model.attach(fake.link)
+    await flush()
+    fake.muted(new Date(1_000 + 7 * 86_400_000).toISOString())
+    expect(model.getSnapshot().mutedUntil).not.toBeNull()
+    model.dropped()
+    server.unread = { ...server.unread, mutedUntil: null }
+    model.reconnected()
+    await flush()
+    expect(model.getSnapshot().mutedUntil).toBeNull()
+  })
+
+  it('does not count what the user read while a chat:read could not go out, and sends it again', async () => {
+    const { model, server } = setup([range(1, 3, null), range(1, 3, null)], { count: 3 })
+    const fake = fakeLink()
+    model.attach(fake.link)
+    await flush()
+    expect(model.getSnapshot().unread.count).toBe(3)
+    fake.connection.open = false
+    model.setReading(true)
+    expect(model.getSnapshot()).toMatchObject({ unread: { count: 0 }, lastReadId: idOf(3) })
+    model.setReading(false)
+    expect(fake.reads).toEqual([])
+    // The server never got the read: it still counts 3.
+    server.unread = { ...server.unread, count: 3, lastReadId: null }
+    fake.connection.open = true
+    model.dropped()
+    model.reconnected()
+    await flush()
+    expect(model.getSnapshot().unread).toEqual({ count: 0, mentions: 0 })
+    expect(fake.reads).toEqual([idOf(3)])
+  })
+})
+
+describe('ChatModel deletes and timeouts', () => {
+  it('shows a message deleted while its page was loading as deleted, and counts it no more', async () => {
+    const first = held()
+    const { model, server } = setup([first.page], { count: 2 })
+    const fake = fakeLink()
+    model.attach(fake.link)
+    server.unread = { ...server.unread, count: 1 }
+    fake.deleted(idOf(2))
+    first.release(range(1, 2, null))
+    await flush()
+    expect(model.getSnapshot().history.messages[1]).toMatchObject({ body: '', deletedAt: expect.any(String) })
+    expect(model.getSnapshot().unread).toEqual({ count: 1, mentions: 0 })
+  })
+
+  it('shows a message deleted while an older page was loading as deleted', async () => {
+    const older = held()
+    const { model } = setup([range(51, 100, 51), older.page])
+    const fake = fakeLink()
+    model.attach(fake.link)
+    await flush()
+    const loading = model.loadOlder()
+    fake.deleted(idOf(40))
+    older.release(range(1, 50, null))
+    await loading
+    expect(model.getSnapshot().history.messages.find((m) => m.id === idOf(40))).toMatchObject({ body: '', deletedAt: expect.any(String) })
+  })
+
+  it('sends a message again with its clientMsgId when the answer is late, then shows it as not confirmed', async () => {
+    const { model, advance } = setup()
+    const fake = fakeLink()
+    model.attach(fake.link)
+    await flush()
+    fake.answerWith(async () => {
+      throw new RequestTimeoutError('request "chat:send" timed out after 8000ms.')
+    })
+    model.send('slow server')
+    await flush()
+    expect(model.getSnapshot().pending[0]).toMatchObject({ status: 'sending' })
+    for (let i = 0; i < SEND_RETRIES; i++) {
+      advance(SEND_RETRY_MS * 2 ** i)
+      await flush()
+    }
+    expect(fake.sends).toHaveLength(SEND_RETRIES + 1)
+    expect(new Set(fake.sends.map((r) => r.clientMsgId)).size).toBe(1)
+    expect(model.getSnapshot().pending[0]).toMatchObject({ status: 'failed', error: NO_ANSWER_TEXT, retryOnReconnect: true })
+
+    // A late answer on the next try: stored once.
+    fake.answerWith(async (request) => message(910, { authorId: 'me', clientMsgId: request.clientMsgId, body: request.body }))
+    model.retry(model.getSnapshot().pending[0]?.clientMsgId ?? '')
+    await flush()
+    expect(model.getSnapshot().pending).toEqual([])
+    expect(model.getSnapshot().history.messages.map((m) => m.body)).toEqual(['slow server'])
   })
 })

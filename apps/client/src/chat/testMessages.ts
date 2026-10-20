@@ -14,6 +14,7 @@ export function message(n: number, fields: Partial<ChatMessage> = {}): ChatMessa
     body: `message ${n}`,
     createdAt: new Date(1_700_000_000_000 + n * 1000).toISOString(),
     deletedAt: null,
+    mentionsYou: false,
     ...fields,
   }
 }

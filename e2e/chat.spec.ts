@@ -266,14 +266,37 @@ test('members chat live, and the history survives a reload and pages back', asyn
   await expect
     .poll(async () => (await getJson<ChatUnreadResponse>(b, API.chatUnread(office.id))).body, { timeout: 10_000 })
     .toMatchObject({ count: 0, mentions: 0 })
+
+  // Closed while scrolled up, then opened with Enter on the map: the list opens at the newest message, so a new
+  // message is read at once.
+  await list.evaluate((el) => {
+    el.scrollTop = 0
+  })
+  await b.getByTestId('chat-toggle').click()
+  await expect(b.getByTestId('chat-bar')).toHaveAttribute('data-expanded', 'false')
+  await focusMap(b)
+  await b.keyboard.press('Enter')
+  await expect(b.getByTestId('chat-input')).toBeFocused()
+  await send(a, 'Are you reading this, Bob?')
+  await expect(storedRow(b, 'Are you reading this, Bob?')).toBeInViewport()
+  await expect
+    .poll(async () => (await getJson<ChatUnreadResponse>(b, API.chatUnread(office.id))).body, { timeout: 10_000 })
+    .toMatchObject({ count: 0, mentions: 0 })
+  await expect(b.getByTestId('chat-unread')).toHaveCount(0)
+  await b.getByTestId('chat-input').press('Escape')
 })
 
 test('typing in the chat never moves the avatar', async () => {
   const testInfo = test.info()
   const input = a.getByTestId('chat-input')
+  // A click on the map takes the focus from a button too, so Enter opens the chat instead of pressing the button.
+  await a.getByTestId('chat-toggle').click()
+  await expect(a.getByTestId('chat-toggle')).toBeFocused()
+  await expect(a.getByTestId('chat-bar')).toHaveAttribute('data-expanded', 'false')
   await focusMap(a)
-  await expect(input).not.toBeFocused()
+  await expect(a.getByTestId('chat-toggle')).not.toBeFocused()
   await a.keyboard.press('Enter')
+  await expect(a.getByTestId('chat-bar')).toHaveAttribute('data-expanded', 'true')
   await expect(input).toBeFocused()
   const local = await standStill(a)
   const onServer = await serverPosition(a, annId)
@@ -321,7 +344,12 @@ test('a sixth message within 10 s is rejected, and goes out after the window', a
   // Ann's earlier messages are out of the window.
   await a.waitForTimeout(Math.max(0, annSentAt + CHAT_RATE_LIMIT.windowMs + 500 - Date.now()))
   const started = Date.now()
-  for (let i = 1; i <= CHAT_RATE_LIMIT.messages; i++) await send(a, `burst ${i} of 6`)
+  // When the first of the five was stored at the latest: its place in the window frees 10 s after that.
+  let firstStored = 0
+  for (let i = 1; i <= CHAT_RATE_LIMIT.messages; i++) {
+    await send(a, `burst ${i} of 6`)
+    if (i === 1) firstStored = Date.now()
+  }
   const input = a.getByTestId('chat-input')
   await input.fill('burst 6 of 6')
   await input.press('Enter')
@@ -335,7 +363,7 @@ test('a sixth message within 10 s is rejected, and goes out after the window', a
   await screenshot(a, 'chat-ann-rate-limited', testInfo)
 
   // Once the first of the five is 10 s old, Retry sends it (same clientMsgId) and Bob gets it.
-  await a.waitForTimeout(Math.max(0, started + CHAT_RATE_LIMIT.windowMs + 1000 - Date.now()))
+  await a.waitForTimeout(Math.max(0, firstStored + CHAT_RATE_LIMIT.windowMs + 1000 - Date.now()))
   await sixth.getByTestId('chat-retry').click()
   await expect(storedRow(a, 'burst 6 of 6')).toHaveCount(1)
   await expect(a.locator('[data-testid="chat-message"][data-pending="true"]')).toHaveCount(0)
@@ -476,6 +504,18 @@ test('status, DND and blocks: busy in a meeting room, no waves on DND, a block h
   await annCard.getByTestId('profile-close').click()
   await a.getByTestId('people-toggle').click()
 
+  // Nor the other way: Bob cannot pick Ann in the list, and a token typed by hand does not mention her.
+  await openChat(b)
+  await b.getByTestId('chat-input').fill('@')
+  await expect(b.getByTestId('chat-mention-option').first()).toHaveText('@everyone')
+  await expect(b.getByTestId('chat-mention-option').filter({ hasText: 'Ann' })).toHaveCount(0)
+  const fromBob = await send(b, `${mentionToken(annId)} still around?`, 'still around?')
+  await expect(storedRow(a, 'still around?')).toHaveAttribute('data-mentions-me', 'false')
+  const asAnn = (await getJson<ChatHistoryResponse>(a, API.chat(office.id))).body.messages.find((m) => m.id === fromBob)
+  expect(asAnn).toMatchObject({ body: `${mentionToken(annId)} still around?`, mentionsYou: false })
+  await b.getByTestId('chat-toggle').click()
+  await expect(b.getByTestId('chat-bar')).toHaveAttribute('data-expanded', 'false')
+
   // Bob unblocks Ann: her messages are back.
   await card.getByTestId('profile-block').click()
   await expect(card.getByTestId('profile-block')).toHaveText('Block')
@@ -494,7 +534,7 @@ test('an owner mutes and kicks a member; the kicked member can enter again', asy
   const card = a.getByTestId('profile-card')
   await expect(card).toHaveAttribute('data-user-id', bobId)
 
-  // Muted for 15 minutes: Bob is told at once, and his bar does not send.
+  // Muted for 15 minutes: Bob is told at once, and the room refuses what he sends.
   await card.getByTestId('profile-mute').selectOption('15')
   await expect(card.getByTestId('profile-notice')).toContainText('Bob is muted until')
   await expect(b.getByTestId('chat-muted')).toContainText('You are muted until')
@@ -503,10 +543,11 @@ test('an owner mutes and kicks a member; the kicked member can enter again', asy
   await expect(b.getByTestId('chat-error')).toContainText('You are muted until')
   await screenshot(b, 'chat-bob-muted', testInfo)
 
-  // The server holds the mute too: after a reload the page does not know, sends, and the room refuses.
+  // After a reload the page learns the mute from the server; the room refuses what it sends.
   await b.reload()
   await inOffice(b)
   await openChat(b)
+  await expect(b.getByTestId('chat-muted')).toContainText('You are muted until')
   await b.getByTestId('chat-input').fill('Am I muted?')
   await b.getByTestId('chat-input').press('Enter')
   const refused = b.locator('[data-testid="chat-message"][data-pending="true"]').filter({ hasText: 'Am I muted?' })

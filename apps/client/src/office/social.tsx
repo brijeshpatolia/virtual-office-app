@@ -17,6 +17,8 @@ export interface Social {
   // null for guests (they may not list them) and until loaded.
   members: readonly MemberSummary[] | null
   prefs: UserPrefs
+  // The prefs (and with them the block list) are loaded once 'ready'; 'error' while a retry waits.
+  prefsStatus: PrefsStatus
   blocked: ReadonlySet<string>
   nameOf(userId: string): string | undefined
   setBlocked(userId: string, blocked: boolean): Promise<void>
@@ -26,7 +28,11 @@ export interface Social {
   closeProfile(): void
 }
 
+export type PrefsStatus = 'loading' | 'ready' | 'error'
+
 const DEFAULT_PREFS: UserPrefs = { statusText: '', blockedUserIds: [], notifyMentions: true }
+// A failed prefs load is tried again after 1 s, 2 s, 4 s ... up to this.
+const PREFS_RETRY_MAX_MS = 30_000
 // A player that is not in the members list (joined after it was loaded) reloads it, at most this often.
 const MEMBERS_RELOAD_MS = 10_000
 
@@ -44,8 +50,12 @@ export function SocialProvider({ value, children }: { value: Social; children: R
 
 export function useOfficeSocial(api: OfficeApi, self: OfficeSelf, link: OfficeLink | null): Social {
   const players = usePresence(link)
-  const [members, setMembers] = useState<readonly MemberSummary[] | null>(null)
+  const [loadedMembers, setMembers] = useState<readonly MemberSummary[] | null>(null)
+  // A member who became a guest may no longer list them.
+  const members = self.role === 'guest' ? null : loadedMembers
   const [prefs, setPrefs] = useState<UserPrefs>(DEFAULT_PREFS)
+  const [prefsStatus, setPrefsStatus] = useState<PrefsStatus>('loading')
+  const [prefsAttempt, setPrefsAttempt] = useState(0)
   const [profileUserId, setProfileUserId] = useState<string | null>(null)
   const [membersVersion, setMembersVersion] = useState(0)
   const membersLoadedAt = useRef(0)
@@ -65,18 +75,30 @@ export function useOfficeSocial(api: OfficeApi, self: OfficeSelf, link: OfficeLi
     }
   }, [api, self.role, membersVersion])
 
+  // Until the block list is loaded the chat shows nothing (useChat). A failure is tried again with a backoff, and at
+  // once when a new connection comes.
+  const prefsReady = prefsStatus === 'ready'
   useEffect(() => {
+    if (prefsReady) return
     let live = true
+    let timer = 0
     api.prefs().then(
       (loaded) => {
-        if (live) setPrefs(loaded)
+        if (!live) return
+        setPrefs(loaded)
+        setPrefsStatus('ready')
       },
-      () => undefined,
+      () => {
+        if (!live) return
+        setPrefsStatus('error')
+        timer = window.setTimeout(() => setPrefsAttempt((n) => n + 1), Math.min(PREFS_RETRY_MAX_MS, 1000 * 2 ** Math.min(prefsAttempt, 5)))
+      },
     )
     return () => {
       live = false
+      window.clearTimeout(timer)
     }
-  }, [api])
+  }, [api, link, prefsReady, prefsAttempt])
 
   // Someone new in the room: reload the members for their role (once per person).
   useEffect(() => {
@@ -122,18 +144,21 @@ export function useOfficeSocial(api: OfficeApi, self: OfficeSelf, link: OfficeLi
   }, [members, players])
   const nameOf = useCallback((userId: string) => names.get(userId), [names])
 
+  // block:set changes one id on the server. Without a connection the PUT replaces the whole list, so it is built from
+  // the list as the server has it now, never from prefs that may not be loaded.
   const setBlocked = useCallback(
     async (userId: string, block: boolean) => {
-      const blockedUserIds = link
-        ? await link.setBlocked(userId, block)
-        : (
-            await api.updatePrefs({
-              blockedUserIds: block ? [...new Set([...prefs.blockedUserIds, userId])] : prefs.blockedUserIds.filter((id) => id !== userId),
-            })
-          ).blockedUserIds
+      let blockedUserIds: string[]
+      if (link) {
+        blockedUserIds = await link.setBlocked(userId, block)
+      } else {
+        const listed = (await api.prefs()).blockedUserIds
+        const next = block ? [...new Set([...listed, userId])] : listed.filter((id) => id !== userId)
+        blockedUserIds = (await api.updatePrefs({ blockedUserIds: next })).blockedUserIds
+      }
       setPrefs((current) => ({ ...current, blockedUserIds }))
     },
-    [link, api, prefs.blockedUserIds],
+    [link, api],
   )
 
   const setNotifyMentions = useCallback(
@@ -161,6 +186,7 @@ export function useOfficeSocial(api: OfficeApi, self: OfficeSelf, link: OfficeLi
       ownPlayer,
       members,
       prefs,
+      prefsStatus,
       blocked,
       nameOf,
       setBlocked,
@@ -169,6 +195,6 @@ export function useOfficeSocial(api: OfficeApi, self: OfficeSelf, link: OfficeLi
       openProfile,
       closeProfile,
     }),
-    [self, api, link, players, ownPlayer, members, prefs, blocked, nameOf, setBlocked, setNotifyMentions, profileUserId, openProfile, closeProfile],
+    [self, api, link, players, ownPlayer, members, prefs, prefsStatus, blocked, nameOf, setBlocked, setNotifyMentions, profileUserId, openProfile, closeProfile],
   )
 }

@@ -13,7 +13,7 @@ import * as schema from './schema/index.ts'
 export * from './schema/index.ts'
 export * from './repository.ts'
 export * from './chatRepository.ts'
-export { messageIdTime, newId, newMessageId } from './id.ts'
+export { messageIdFloor, messageIdTime, newId, newMessageId } from './id.ts'
 // All tables as one object, for drizzle({ schema }) and Better Auth's drizzleAdapter.
 export { schema }
 

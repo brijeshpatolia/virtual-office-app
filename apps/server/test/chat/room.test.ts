@@ -1,4 +1,4 @@
-import { MSG, ROOM_NAME, type ChatMessage, type OrgRole } from '@vo/shared'
+import { MSG, ROOM_NAME, mentionToken, type ChatMessage, type OrgRole } from '@vo/shared'
 import { Client } from '@colyseus/sdk'
 import { ErrorCode } from '@colyseus/core'
 import { randomUUID } from 'node:crypto'
@@ -112,6 +112,26 @@ describe('chat:send', () => {
     await Promise.all([a.leave(), b.leave()])
   })
 
+  it('tells each recipient whether the message mentions them, never across a block', async () => {
+    const { company, members, join } = await office(['Ann', 'member'], ['Ben', 'member'], ['Cy', 'member'])
+    const [ann, ben, cy] = members as [Member, Member, Member]
+    await t.services.prefs.setBlocked(company.orgId, ann.userId, ben.userId, true)
+    const [a, b, c] = await Promise.all([join(ann), join(ben), join(cy)])
+    const answer = await send(a, `<!everyone> and ${mentionToken(ben.userId)}`)
+    expect(answer.message.mentionsYou).toBe(false)
+    await send(a, `just ${mentionToken(cy.userId)}`)
+    await waitFor(() => chatNews(b).length === 2 && chatNews(c).length === 2, 'two messages each')
+    // Ann blocked Ben: neither her everyone nor her mention of him counts for him; both count for Cy.
+    expect(chatNews(b).map((m) => m.mentionsYou)).toEqual([false, false])
+    expect(chatNews(c).map((m) => m.mentionsYou)).toEqual([true, true])
+    // The other way: Ben mentions Ann, who blocked him.
+    await send(b, `hi ${mentionToken(ann.userId)} <!everyone>`)
+    await waitFor(() => chatNews(a).length === 1 && chatNews(c).length === 3, 'ben to be heard')
+    expect(chatNews(a)[0]?.mentionsYou).toBe(false)
+    expect(chatNews(c)[2]?.mentionsYou).toBe(true)
+    await Promise.all([a.leave(), b.leave(), c.leave()])
+  })
+
   it('carries 2,000 characters of a multibyte script over the WebSocket and rejects 2,001', async () => {
     const { members, join } = await office(['Ann', 'member'], ['Ben', 'member'])
     const [ann, ben] = members as [Member, Member]
@@ -163,11 +183,29 @@ describe('chat:read', () => {
     for (const lastReadId of [m2, m0, randomUUID(), 'junk']) b.room.send(MSG.chatRead, { lastReadId })
     const unread = () => t.services.chat.unread(scope, ben)
     await vi.waitFor(async () => expect((await unread()).lastReadId).toBe(m2), { timeout: 3000, interval: 50 })
-    expect(await unread()).toEqual({ count: 1, mentions: 0, lastReadId: m2 })
+    expect(await unread()).toEqual({ count: 1, mentions: 0, lastReadId: m2, mutedUntil: null })
     b.room.send(MSG.chatRead, { lastReadId: m3 })
     await vi.waitFor(async () => expect((await unread()).lastReadId).toBe(m3), { timeout: 3000, interval: 50 })
     expect(b.closeCode).toBeNull()
     await Promise.all([a.leave(), b.leave()])
+  })
+
+  it('writes a read that waits for the interval as soon as the reader leaves', async () => {
+    const { scope, members, join } = await office(['Ann', 'member'], ['Ben', 'member'])
+    const [ann, ben] = members as [Member, Member]
+    const a = await join(ann)
+    const b = await join(ben)
+    const m1 = (await send(a, 'one')).message.id
+    const m2 = (await send(a, 'two')).message.id
+    const unread = () => t.services.chat.unread(scope, ben)
+    b.room.send(MSG.chatRead, { lastReadId: m1 })
+    await vi.waitFor(async () => expect((await unread()).lastReadId).toBe(m1), { timeout: 3000, interval: 20 })
+    b.room.send(MSG.chatRead, { lastReadId: m2 })
+    await sleep(50)
+    await b.leave()
+    // Well before the 1 s interval is over.
+    await vi.waitFor(async () => expect((await unread()).lastReadId).toBe(m2), { timeout: 400, interval: 20 })
+    await a.leave()
   })
 })
 
@@ -188,7 +226,7 @@ describe('tenant isolation in the room', () => {
     await expect(z.room.request(MSG.chatDelete, { id: secret.id })).rejects.toMatchObject(rejected('not_found'))
     z.room.send(MSG.chatRead, { lastReadId: secret.id })
     await sleep(200)
-    expect(await t.services.chat.unread(theirs.scope, zoe)).toEqual({ count: 0, mentions: 0, lastReadId: null })
+    expect(await t.services.chat.unread(theirs.scope, zoe)).toEqual({ count: 0, mentions: 0, lastReadId: null, mutedUntil: null })
     expect((await t.services.chat.list(theirs.scope, zoe, { limit: 50 })).messages).toEqual([])
     expect(chatNews(z)).toEqual([])
     expect((await t.services.chat.list(mine.scope, ann, { limit: 50 })).messages.map((m) => m.body)).toEqual(['company secret'])
