@@ -55,8 +55,12 @@ describe('chat messages', () => {
     expect((await tenant.countUnread(officeId, bob, { blockedUserIds: [], limit: 100 })).mentions).toBe(1)
     expect((await tenant.countUnread(officeId, outsider, { blockedUserIds: [], limit: 100 })).mentions).toBe(0)
 
+    expect(await tenant.findChatMessageByClientMsgId(officeId, ann, clientMsgId)).toMatchObject({ id: first?.message.id })
+    expect(await tenant.findChatMessageByClientMsgId(officeId, bob, clientMsgId)).toBeNull()
+
     const other = await company('chat-c')
     expect(await other.tenant.getChatMessage(officeId, first?.message.id ?? '')).toBeNull()
+    expect(await other.tenant.findChatMessageByClientMsgId(officeId, ann, clientMsgId)).toBeNull()
     expect(await other.tenant.insertChatMessage({ ...input, officeId: other.officeId })).toBeNull()
   })
 

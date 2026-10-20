@@ -7,7 +7,7 @@ import { join } from 'node:path'
 import { createAuth, type Auth } from '../../src/auth/auth.ts'
 import { createGetOfficeAccess, type GetOfficeAccess } from '../../src/auth/membership.ts'
 import { createVerifyAccessToken, type VerifyAccessToken } from '../../src/auth/verifyAccessToken.ts'
-import { createServices } from '../../src/chat/services.ts'
+import { createServices, type Services } from '../../src/chat/services.ts'
 import { loadEnv, type Env } from '../../src/env.ts'
 import { createMailer } from '../../src/mail/mailer.ts'
 import { configureApi, limitRequestBodies, listeningPort } from '../../src/server.ts'
@@ -27,6 +27,7 @@ export interface TestApi {
   auth: Auth
   getOfficeAccess: GetOfficeAccess
   verifyAccessToken: VerifyAccessToken
+  services: Services
   baseUrl: string
   client(): TestClient
   mails(): Promise<SentMail[]>
@@ -44,8 +45,9 @@ export async function startTestApi(vars: Record<string, string> = {}): Promise<T
   const getOfficeAccess = createGetOfficeAccess(database.db)
   const verifyAccessToken = createVerifyAccessToken({ env, auth })
 
+  const services = createServices(database.db)
   const app = express()
-  configureApi(app, { env, db: database.db, auth, mailer, getOfficeAccess, services: createServices(database.db) })
+  configureApi(app, { env, db: database.db, auth, mailer, getOfficeAccess, services })
   const httpServer = createServer(app)
   limitRequestBodies(httpServer)
   await new Promise<void>((resolve) => httpServer.listen(0, '127.0.0.1', resolve))
@@ -58,6 +60,7 @@ export async function startTestApi(vars: Record<string, string> = {}): Promise<T
     auth,
     getOfficeAccess,
     verifyAccessToken,
+    services,
     baseUrl,
     // Each client has its own cookies and its own IP (x-forwarded-for), so Better Auth's per-IP rate limits
     // (3 sign-ins per 10 s, 3 codes per 60 s) apply per test user.

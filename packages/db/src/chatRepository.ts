@@ -83,6 +83,14 @@ export function chatRepository(db: Db, orgId: string) {
     return rows[0] ?? null
   }
 
+  // The author's message with this clientMsgId in the office (an earlier try of a retried send), or null.
+  const findChatMessageByClientMsgId = async (officeId: string, authorId: string, clientMsgId: string): Promise<ChatMessageRecord | null> => {
+    const rows = await selectRecords()
+      .where(and(inOffice(officeId), eq(chatMessages.authorId, authorId), eq(chatMessages.clientMsgId, clientMsgId)))
+      .limit(1)
+    return rows[0] ?? null
+  }
+
   const readState = async (officeId: string, userId: string): Promise<string | null> => {
     const rows = await db
       .select({ lastReadId: chatReadState.lastReadId })
@@ -95,6 +103,7 @@ export function chatRepository(db: Db, orgId: string) {
   return {
     membersAmong,
     getChatMessage,
+    findChatMessageByClientMsgId,
     readState,
 
     async listMembers(): Promise<MemberRecord[]> {
@@ -147,11 +156,8 @@ export function chatRepository(db: Db, orgId: string) {
         const message = await getChatMessage(input.officeId, id)
         return message === null ? null : { message, created: true }
       }
-      const rows = await selectRecords()
-        .where(and(inOffice(input.officeId), eq(chatMessages.authorId, input.authorId), eq(chatMessages.clientMsgId, input.clientMsgId)))
-        .limit(1)
-      const existing = rows[0]
-      return existing === undefined ? null : { message: existing, created: false }
+      const existing = await findChatMessageByClientMsgId(input.officeId, input.authorId, input.clientMsgId)
+      return existing === null ? null : { message: existing, created: false }
     },
 
     // Newest first (keyset paging on the id).

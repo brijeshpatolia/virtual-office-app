@@ -10,8 +10,10 @@ export interface Services {
   moderation: Moderation
 }
 
-export function createServices(db: Db): Services {
-  const prefs = createPrefsService(db)
-  const moderation = createModeration({ db })
-  return { prefs, moderation, chat: createChatService({ db, prefs, moderation }) }
+// now: the wall clock in ms (message times, mutes, the chat rate limit); tests pass a fake one.
+export function createServices(db: Db, options: { now?: () => number } = {}): Services {
+  const now = options.now ?? Date.now
+  const prefs = createPrefsService(db, now)
+  const moderation = createModeration({ db, now })
+  return { prefs, moderation, chat: createChatService({ db, prefs, moderation, now }) }
 }
