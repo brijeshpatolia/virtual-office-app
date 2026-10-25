@@ -1,8 +1,9 @@
 # Virtual Office
 
 Virtual Office is a virtual office in the browser for remote teams.
-Each person has an avatar on a 2D map of the company's office. People walk around, sit at desks and see each other move.
-Later phases add chat, proximity video, a meeting-room call, screen share and a whiteboard.
+Each person has an avatar on a 2D map of the company's office. People walk around, sit at desks, see each other move
+and chat with everyone in the office. They set a status (Available, Busy, Do not disturb), and can block someone.
+Later phases add proximity video, a meeting-room call, screen share and a whiteboard.
 
 The client uses Phaser 4 for the map and React 19 for the pages and the HUD. Vite 8 builds the client.
 The office server runs Express 5 with Better Auth (accounts, companies, invitations) and Colyseus 0.18 (one realtime room per office) on one port.
@@ -43,17 +44,20 @@ You need no accounts, no database and no Docker for development.
 9. To meet someone, click **Copy invite link** (as Member or Guest) and open the link in another browser or a private window.
    Sign in there with another email address, join, and you see each other walk and sit.
    A link from the header works for 3 days and 10 people. **Links** lists the open links; **Revoke** ends one.
+10. Press Enter to chat with everyone in the office, and Esc to go back to the map (see [Keyboard shortcuts](#keyboard-shortcuts)).
+    The dot in the header sets your status, **People** lists the company, and a click on someone (their avatar, a row in
+    **People** or their name in the chat) opens their card: Wave, Block, and for owners and admins Mute and Kick.
 
 The data stays in `.data/` (PGlite in `.data/pglite`). Delete the folder to start again with an empty database.
 
 To try the office without the server, open http://localhost:8000/dev/office. It is a mock office with fake players, in development builds only.
 
-## Architecture (P1)
+## Architecture (P2)
 
 ```mermaid
 flowchart LR
   subgraph Browser["Browser"]
-    Pages["React pages: sign-in with an email code, name, onboarding, invite, office header and HUD"]
+    Pages["React pages: sign-in with an email code, name, onboarding, invite, office header and HUD, chat bar, status menu, People panel, profile card"]
     Game["Phaser office scene: map, own avatar with local collision, other avatars, seats, zone toasts"]
     Pages <-->|EventBus| Game
   end
@@ -62,8 +66,8 @@ flowchart LR
 
   subgraph Server["Office server: one Node process on :2567, P1b: Fly.io"]
     Auth["Better Auth on /api/auth: email OTP, Google when configured, companies and roles, invitations, EdDSA keys"]
-    Routes["/api routes: config, me, companies, offices, invite links, rt-token"]
-    Room["Colyseus OfficeRoom, one per office: join check, moves, zones, seats, presence"]
+    Routes["/api routes: config, me, companies, offices, invite links, rt-token, chat history and unread, members, prefs"]
+    Room["Colyseus OfficeRoom, one per office: join check, moves, zones, seats, presence and status, chat, waves, mute and kick"]
   end
 
   DB[("PGlite in .data/pglite, or Postgres via DATABASE_URL, P1b: Neon")]
@@ -84,6 +88,7 @@ flowchart LR
 The server is the authority. The client moves its own avatar at once (Arcade physics with a 20 x 12 px body at the feet) and sends its position 10 times a second.
 The room checks every move (speed, a swept body against walls and furniture, zone rules) and answers a bad one with `move:reject` and the last accepted position; the client snaps back there.
 Zones, seats and presence come from the synced room state, so every client shows the same thing.
+Chat is not in the synced state: a message goes to the room (`chat:send`), the room stores it and then sends it to the others (`chat:new`), and the history comes from `/api` in pages.
 
 ## Scripts
 
@@ -124,8 +129,10 @@ That fails on syntax Node cannot strip and on imports Node cannot resolve, which
 │   │   │   ├── router/         A small History API router (the routes are CLIENT_ROUTES in @vo/shared)
 │   │   │   ├── api/            Better Auth browser client, /api requests, the realtime token kept in memory
 │   │   │   ├── pages/          Sign-in, name, onboarding, invite and accept-invitation pages
-│   │   │   ├── office/         The office page: header, connection state, the dev mock page /dev/office
-│   │   │   ├── net/            The room link (Colyseus) and the mock office
+│   │   │   ├── office/         The office page: header, connection state, people and prefs for the HUD, the dev mock page /dev/office
+│   │   │   ├── chat/           The chat bar: messages, history pages, unread counts, mentions, the keyboard hand-off
+│   │   │   ├── presence/       Status menu, People panel, profile card (Wave, Block, Mute, Kick)
+│   │   │   ├── net/            The room link (Colyseus) and the mock office (with a mock chat)
 │   │   │   ├── hooks/          Small React hooks
 │   │   │   ├── ui/             React HUD (zone label, seat hint, toasts, debug hint)
 │   │   │   └── game/
@@ -157,8 +164,11 @@ That fails on syntax Node cannot strip and on imports Node cannot resolve, which
 │       │   ├── server.ts       Wires the database, auth, HTTP routes and the office room
 │       │   ├── auth/           Better Auth, roles, realtime token check, office access with a cache
 │       │   ├── mail/           Sign-in codes and invitations (Resend; console and log file in dev)
-│       │   ├── http/           The /api routes
-│       │   └── rooms/          OfficeRoom (one Colyseus room per office), its synced state and its store
+│       │   ├── http/           The /api routes (chatRoutes.ts: chat history, unread, members, prefs)
+│       │   ├── chat/           Chat service, moderation (mute, kick), the sliding-window rate limit
+│       │   ├── presence/       User prefs per company: status text, block list, mention notifications
+│       │   └── rooms/          OfficeRoom (one Colyseus room per office), its synced state, its store and the
+│       │                       chat, presence and admin message handlers
 │       └── test/               HTTP tests (real auth on PGlite) and room tests (real Colyseus clients)
 ├── packages/
 │   ├── db/                     Database (@vo/db): Drizzle schema, migrations, PGlite or Postgres
@@ -175,7 +185,7 @@ That fails on syntax Node cannot strip and on imports Node cannot resolve, which
 │       │   ├── protocol/       Realtime messages, synced state shape and HTTP API (zod schemas)
 │       │   └── cli/validate-map.ts  The validate:map command
 │       └── test/
-├── e2e/                        Playwright tests: two browsers in one office, and an outsider
+├── e2e/                        Playwright tests: two browsers in one office, an outsider, and the chat, status and moderation
 ├── .github/workflows/ci.yml    Continuous integration: check, then e2e
 ├── CREDITS.md                  Art credits and license notes
 ├── eslint.config.js
@@ -253,8 +263,8 @@ The client reads two more variables. `VITE_SERVER_URL` (unset in development) is
 
 `packages/db` uses Drizzle. Without `DATABASE_URL` it opens PGlite in `PGLITE_DIR`; with it, Postgres (node-postgres).
 The server applies the migrations in `packages/db/drizzle` when it starts (on Postgres under a lock, so two servers can start together):
-`0000_init` (the Better Auth tables, offices, invite links, presence sessions and the audit log), `0001_member_unique` (one membership per user and company)
-and `0002_member_removals` (members an owner or admin removed).
+`0000_init` (the Better Auth tables, offices, invite links, presence sessions and the audit log), `0001_member_unique` (one membership per user and company),
+`0002_member_removals` (members an owner or admin removed) and `0003_chat_presence` (chat messages, mentions, read state, chat mutes and user prefs for P2).
 
 After you change a table in `packages/db/src/schema`, write a migration with a name:
 
@@ -271,7 +281,7 @@ npm run generate --workspace @vo/db -- --name <name>
 One Colyseus room per office (`joinOrCreate('office', { officeId })`). The rules live in `@vo/shared` and `apps/server/src/rooms/OfficeRoom.ts`:
 
 - Join: a valid realtime token for this office, and a current member of the token's company. Anything else fails with code 525 and no reason.
-- One session per person: opening the office in a second tab closes the first one (close code 4100).
+- One session per person: opening the office in a second tab closes the first one (close code 4100). An owner or admin's kick closes it with 4103.
   A dropped connection keeps the avatar and its seat for 30 s, but only when the SDK will try to reconnect (close codes 1001, 1005, 1006 and 4010).
   Closing the tab leaves the room at once (the page leaves on `pagehide`).
 - Moves: 20 per second on average and up to 40 at once (a backlog after a network stall); each one is checked for speed (160 px/s with 25% slack,
@@ -280,14 +290,91 @@ One Colyseus room per office (`joinOrCreate('office', { officeId })`). The rules
 - Seats: sit within 48 px of a free seat with a clear line through walls (the client offers it within 40 px and stops first); standing up or
   leaving frees it, and the answer says where the avatar stands.
 - A member who becomes a guest while in a zone guests may not enter is sent back to the door: the room closes the connection (code 4102) and they enter again at the spawn.
-- Presence: away after 10 minutes without input, or 5 minutes with the tab hidden.
+- Presence: away after 10 minutes without input, or 5 minutes with the tab hidden; busy by itself in a zone with `mediaMode` `room`, unless on DND
+  (see [Status and privacy](#status-and-privacy)).
 - Each session gets a `presence_sessions` row while it is in the office.
+
+### Chat
+
+One chat per office, for everyone in it: the bar under the map. It never hides; closed, it is one line with the newest message and the unread badge.
+There are no Nearby or Room tabs yet (they need the media audiences of P3).
+
+- Send: the client sends `chat:send` with a `clientMsgId` (a UUID it makes) and the text. The room checks it and stores it, and only then sends `chat:new`
+  to everyone else; the sender gets the stored message as the answer. A retry with the same `clientMsgId` (after a timeout or a reconnect) answers the
+  stored message again and sends nothing twice. Without an answer in 8 s the bar sends it again twice by itself, then shows **Retry**.
+- Limits: 1 to 2,000 characters after trimming (control characters and bidi overrides are dropped). At most 5 messages per person in any 10 seconds:
+  the sixth is refused ("Slow down"), and **Retry** sends it once the window allows. The limit is kept in the memory of the one server process.
+- History: pages of 50, newest first, keyed by the message id (uuidv7, so ids sort by time). Scrolling up loads the next page above.
+  Unread counts stop at 100; the badge shows 99+.
+- Text only: messages show as text, never as HTML. `http` and `https` links open in a new tab with `rel="noopener noreferrer"`, with the address as
+  their title. A link with a user name or password before an `@` (`https://bank.example∕login@evil.example`) stays text: it would show one host and open another.
+- Mentions: type `@` and pick a person (or @everyone) from the list. The message stores the person's id (`<@userId>`), never the name, so a renamed
+  person or a look-alike name changes nothing. Two people with the same name both show in the list (with their role, where they are and the end of their id), and each
+  pick keeps its own id; an edit inside a picked name turns it back into plain text. A mention counts only for current members, never for the author
+  and never across a block, in either direction (@everyone too, and also for a block made later): the server tells each reader whether a message
+  mentions them (`mentionsYou`), and the bar highlights, counts and notifies only by that. People you blocked are not in the list.
+  Guests cannot mention everyone: their `<!everyone>` is stored as the plain text `@everyone`.
+  While the tab is hidden, a mention shows a browser notification, if you allowed notifications and are not on DND.
+- Read state: while you see the newest message, the bar sends `chat:read` (at most once a second; the room writes at most once a second).
+  It only moves forward. Unread counts skip your own messages, deleted ones and people you blocked. A read the bar could not send while offline
+  goes out again after the reconnect, and the badge counts only what came after it. The room writes a waiting read when you leave.
+- Guests see only the messages sent after they joined the company, in the history and in the unread counts.
+- Delete: the author, or an owner or admin, deletes a message for everyone. The text is cleared and the row stays ("Message deleted").
+- Mute: owners and admins mute someone with a lower role in the profile card, for 15 minutes, 1 hour, 24 hours or 7 days, or unmute them.
+  A mute holds in every office of the company. The muted person is told at once (and, after a reconnect or a reload, with the unread counts) and
+  their messages are refused until it ends. The bar never refuses by itself: the server decides, so an unmute it did not hear of still lets a message through.
+- Kick: closes the person's connection to the office (close code 4103, "Removed from the office"). They stay a member and can enter again at once.
+- Mutes, unmutes, kicks and deleting someone else's message go to the audit log, without message text.
+- Retention: messages are kept until they are deleted, or until the company or the author's account is deleted. A retention setting per company is not built yet.
+
+| Route                                        | Who                                 | Answer                                                      |
+| -------------------------------------------- | ----------------------------------- | ----------------------------------------------------------- |
+| `GET /api/offices/:id/chat?before=&limit=`   | members and guests                  | Up to 50 messages, newest first (each with your `mentionsYou`), and `nextBefore` for the next page. |
+| `GET /api/offices/:id/chat/unread`           | members and guests                  | `count`, `mentions`, `lastReadId` and your `mutedUntil`.     |
+| `GET /api/offices/:id/members`               | owners, admins and members (403 for guests) | The members with their role, oldest first.          |
+| `GET` and `PUT /api/me/prefs?orgId=`         | members and guests of that company  | Your status text, block list and mention notification setting. |
+
+Everyone outside the office's company gets 404, as for the other office routes.
+
+### Status and privacy
+
+- Status: Available, Busy or Do not disturb, chosen with the dot in the header. Away comes by itself (see Presence above) and ends with your next input.
+  Busy also shows by itself while you are in the meeting room or the private office (zones with `mediaMode` `room`), unless you chose DND.
+  The status you choose lasts for the session: a reconnect keeps it, a new visit starts at Available.
+- Status text: up to 80 characters on one line, saved per company, shown in **People** and on the profile card.
+- Do not disturb: no waves reach you, and no mention notifications. In P3 it also keeps your audio and video out of the open areas.
+- Wave (profile card): the other person sees "Ann waved at you". At most 3 waves per 30 s, and 1 per person per 10 s; never to someone on DND.
+- Block (profile card): you no longer see the person's messages (they fold into "1 message from a blocked person"), and no waves or mentions go between
+  the two of you, in either direction. In P3 a block also removes them from your audio and video. They are not told.
+  The chat waits for your block list: until it has loaded (a failed load is tried again, with a note in the bar), it shows no messages and sends no
+  notifications, and Block waits too.
+- **People**: the company's members, online first with their status, then offline. Guests see only the people in the office now.
+- A role change (by an owner or admin) reaches the page within a minute (`role:changed`, also after a reconnect), and a new connection reads the role
+  again, so Mute, Kick, deleting others' messages, @everyone and **People** follow it. The server checks the role for every action anyway.
+- Privacy promises: no analytics or tracking scripts, no activity reports, no "time online" charts and no recording. The `presence_sessions` rows only
+  count who is in an office (for billing later). Your block list and settings are yours: the server shows them to nobody else.
+  The server stores your status text, block list, mention notification setting and how far you read the chat.
+
+## Keyboard shortcuts
+
+| Key                         | Where                  | What                                                                  |
+| --------------------------- | ---------------------- | --------------------------------------------------------------------- |
+| Arrow keys or WASD          | Map                    | Walk.                                                                 |
+| E                           | Map, near a seat       | Sit down, or stand up.                                                |
+| Enter                       | Map                    | Open the chat and type.                                               |
+| Enter, Shift+Enter          | Chat input             | Send; a new line.                                                     |
+| @                           | Chat input             | Mention someone: Up and Down choose, Enter or Tab picks, Esc closes the list. |
+| Esc                         | Chat input, panels     | Back to the map; closes the open panel or card.                       |
+| `` ` `` (the key left of 1) | Map                    | Show or hide the map debug overlay.                                   |
+
+While a field has the focus (the chat, the status text, a select), no key moves the avatar. A click on the map gives the keys back to the map; it also
+takes the focus from a button, so Enter then opens the chat.
 
 ## Tests
 
 `npm test` runs the unit and integration tests: map and movement rules, client logic, the repository on PGlite, the HTTP API with real Better Auth on in-memory PGlite (codes read from the dev mail log), and the office room with real Colyseus clients.
 
-`npm run e2e` runs `e2e/office.spec.ts` in Chromium. Playwright starts its own office server (port 2600, `NODE_ENV=development`) and Vite client (port 8100),
+`npm run e2e` runs the tests in `e2e/` in Chromium. Playwright starts its own office server (port 2600, `NODE_ENV=development`) and Vite client (port 8100),
 so it does not touch `npm run dev` or your `.data`. The server gets a fresh PGlite database in a temporary folder, which is removed at the end; the test reads the sign-in codes from its `dev-mail.log`.
 
 - Ann signs up with an email code, creates a company and an office, and copies a member invite link (3 days, 10 people).
@@ -298,6 +385,22 @@ so it does not touch `npm run dev` or your `.data`. The server gets a fresh PGli
 - Ann sits at desk d1 (E) and Bob sees the seat taken and her avatar drawn seated there; she stands up again.
 - Bob closes his tab and Ann sees him go at once; Ann signs out.
 - Cleo, from another company, gets "Office not found" for Ann's office, no realtime token for it, and her own token does not open Ann's room.
+
+`e2e/chat.spec.ts` (P2) has Ann (owner) and Bob (member) in browsers, a guest later, and 22 more members without a browser: they sign in over HTTP and
+send through the room with the Colyseus SDK in Node (5 messages each, within the rate limit), so the chat has three pages quickly.
+
+- Bob sees Ann's message live (the one-line bar with the unread badge, then the open bar; the link opens in a new tab with `noopener noreferrer`),
+  and a mention picked from the list is stored as Bob's id. After a reload he sees the newest 50, and scrolling up pages back to the start:
+  no gaps, no duplicates, in the server's order.
+  Closed while scrolled up and opened again with Enter on the map, Bob's list is at the newest message and a new one counts as read.
+- After a click on a button and then on the map, Enter opens Ann's chat. Typing `wasd e` and holding the arrow keys in the chat input moves her avatar
+  neither on her page nor on the server; after Esc the arrow keys walk again.
+- Ann's sixth message within 10 s is refused with "Slow down", and **Retry** sends it after the window.
+- A guest sees none of the earlier messages (bar, history and unread), sees a later one live and after a reload, cannot mention everyone and cannot list the members.
+- Ann's status text reaches Bob; she shows as busy in the meeting room; on DND no wave reaches her; Bob blocks her: her messages fold away,
+  her mention of him does not count, and her wave does not reach him; Ann is not in his mention list, and a token he types does not mention her.
+- Ann mutes Bob: the server refuses his message, and after a reload his bar shows the mute again; unmuted, **Retry** sends it; Ann deletes it for everyone;
+  she kicks Bob, he sees "Removed from the office" and enters again.
 
 The doorways leave the avatar only 12 px of room, and headless Chromium with software rendering draws few frames, so a key goes up a frame or two late.
 Where the path is narrow the test therefore uses `window.__voOffice.walkTo(x, y)`: it exists only in development builds and walks in a straight line at normal speed,
@@ -310,7 +413,9 @@ Playwright needs its Chromium: run `npx playwright install chromium` once. In a 
 PW_CHROMIUM_PATH=/opt/pw-browsers/chromium npm run e2e
 ```
 
-Set `E2E_SCREENSHOT_DIR` to keep the screenshots of both browsers in a folder; they are also attached to the Playwright report.
+Set `E2E_SCREENSHOT_DIR` to keep the screenshots of the browsers in a folder; they are also attached to the Playwright report.
+CI uses Playwright's headless shell; to run with it in the container, point `PW_CHROMIUM_PATH` at it (for example
+`/opt/pw-browsers/chromium_headless_shell-1194/chrome-linux/headless_shell`).
 CI runs the e2e job after the check job and uploads the Playwright report and traces when it fails.
 
 ## How the map works
@@ -452,8 +557,8 @@ Doors and walls are in no zone, so the label disappears there.
 
 ## Status
 
-Phase P0 (new toolchain, the map as data) and phase P1a (walkable multiplayer office and accounts, on one machine) are done.
-Next is P1b: the deployment.
+Phase P0 (new toolchain, the map as data), phase P1a (walkable multiplayer office and accounts, on one machine) and phase P2
+(the global chat, presence status and the privacy states) are done. P1b, the deployment, is still to do; after it comes P3 (proximity audio and video, the meeting room).
 
 Done in P0:
 
@@ -473,6 +578,17 @@ Done in P1a:
   the open invite links with Revoke.
 - Tests: about 370 unit and integration tests, and the two-browser e2e test. CI runs the check job and then the e2e job.
 
+Done in P2:
+
+- The chat bar under the map (never hidden; one line with the newest message and the unread badge when closed; Enter opens it, Esc goes back to the map; the draft stays when it closes).
+- Messages stored before they go out, with a `clientMsgId` (retries are safe); history in pages of 50; unread counts and read state;
+  mentions from an autocomplete, stored as user ids, with browser notifications while the tab is hidden; 5 messages per 10 s; 2,000 characters;
+  text-only rendering with safe links; soft delete by the author or an owner or admin.
+- Status (Available, Busy, Do not disturb, automatic Away and Busy), status text, waves, DND, the block list, the People panel and the profile card.
+- Owner and admin mute (timed) and kick (the membership stays), with audit log entries.
+- The keyboard hand-off: while a field has the focus the scene reads no keys and captures none; a click on the map gives them back.
+- Tests: about 480 unit and integration tests, and the P2 e2e test (`e2e/chat.spec.ts`) next to the P1 one.
+
 P1b (deployment) will add:
 
 - The server on Fly.io (one Node 24 process; a performance-1x machine and a graceful drain before paying pilots), with staging and production.
@@ -487,7 +603,10 @@ Still open:
 - The Better Auth browser client does not know the guest role, so the invitation page types the role as owner, admin or member (display only).
 - There is no page yet to list, remove or re-invite members, or to send email invitations: owners and admins use the Better Auth endpoints
   (`/api/auth/organization/remove-member`, `invite-member`) for now.
-- The limits on invitation mails are counted in the memory of the one server process; a restart resets them.
+- The limits on invitation mails are counted in the memory of the one server process; a restart resets them. So are the chat and wave rate limits.
+- Chat: no retention setting per company yet; no Nearby or Room tabs (P3). After a reload, a muted person's bar learns of the mute only when it sends.
+  Screen readers hear your own message twice (as it is sent, and as it is stored).
+- On a 390 px wide screen an owner's header (invite controls, status, People, Sign out) is wider than the screen and scrolls sideways; it needs an overflow menu.
 
 ## Art and license
 

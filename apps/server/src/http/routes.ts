@@ -28,10 +28,12 @@ import { createHash, randomBytes } from 'node:crypto'
 import { z } from 'zod'
 import { can, toOrgRole } from '../auth/access.ts'
 import type { Auth } from '../auth/auth.ts'
-import type { GetOfficeAccess } from '../auth/membership.ts'
+import type { GetOfficeAccess, OfficeAccess } from '../auth/membership.ts'
 import { ACCESS_TOKEN_AUDIENCE } from '../auth/verifyAccessToken.ts'
+import type { Services } from '../chat/services.ts'
 import type { Env } from '../env.ts'
 import type { Mailer } from '../mail/mailer.ts'
+import { registerChatRoutes } from './chatRoutes.ts'
 
 export interface RouteDeps {
   env: Env
@@ -39,16 +41,46 @@ export interface RouteDeps {
   auth: Auth
   mailer: Mailer
   getOfficeAccess: GetOfficeAccess
+  services: Services
 }
 
 export const TEMPLATE_VERSION = 1
 export const DEFAULT_INVITE_LINK_HOURS = 168
 
-type Session = NonNullable<Awaited<ReturnType<Auth['api']['getSession']>>>
-type SessionHandler = (req: Request, res: Response, session: Session) => Promise<void>
+export type Session = NonNullable<Awaited<ReturnType<Auth['api']['getSession']>>>
+export type SessionHandler = (req: Request, res: Response, session: Session) => Promise<void>
 
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS'])
-const IdSchema = z.string().min(1).max(64)
+export const IdSchema = z.string().min(1).max(64)
+
+// Wraps a handler that needs a signed-in user (401 unauthorized otherwise).
+export function signedInWith(auth: Auth): (handler: SessionHandler) => RequestHandler {
+  return (handler) => async (req, res) => {
+    const session = await auth.api.getSession({ headers: fromNodeHeaders(req.headers) })
+    if (!session) return sendError(res, 'unauthorized')
+    await handler(req, res, session)
+  }
+}
+
+export type RouteOffice = OfficeAccess & { officeId: string }
+
+// The office of the route (:officeId) and the caller's access to it; null (404 sent) when the caller is not a
+// member, so office ids do not leak.
+export async function officeOfRoute(
+  getOfficeAccess: GetOfficeAccess,
+  req: Request,
+  res: Response,
+  userId: string,
+): Promise<RouteOffice | null> {
+  const officeId = IdSchema.safeParse(req.params.officeId)
+  const access = officeId.success ? await getOfficeAccess(userId, officeId.data) : null
+  if (!access || !officeId.success) {
+    sendError(res, 'not_found')
+    return null
+  }
+  return { officeId: officeId.data, ...access }
+}
+
 // randomBytes(32) in base64url.
 const InviteTokenSchema = z.string().regex(/^[A-Za-z0-9_-]{43}$/)
 
@@ -58,14 +90,7 @@ const InviteTokenSchema = z.string().regex(/^[A-Za-z0-9_-]{43}$/)
 // (getOfficeAccess), or of the invite link the caller holds.
 export function registerRoutes(app: Application, deps: RouteDeps): void {
   const { env, db, auth, getOfficeAccess } = deps
-
-  const signedIn =
-    (handler: SessionHandler): RequestHandler =>
-    async (req, res) => {
-      const session = await auth.api.getSession({ headers: fromNodeHeaders(req.headers) })
-      if (!session) return sendError(res, 'unauthorized')
-      await handler(req, res, session)
-    }
+  const signedIn = signedInWith(auth)
 
   const findInvite = async (token: unknown) => {
     const parsed = InviteTokenSchema.safeParse(token)
@@ -141,16 +166,7 @@ export function registerRoutes(app: Application, deps: RouteDeps): void {
     }),
   )
 
-  // The office of the route and the caller's access to it; null (404 sent) when the caller is not a member.
-  const officeOf = async (req: Request, res: Response, userId: string) => {
-    const officeId = IdSchema.safeParse(req.params.officeId)
-    const access = officeId.success ? await getOfficeAccess(userId, officeId.data) : null
-    if (!access || !officeId.success) {
-      sendError(res, 'not_found')
-      return null
-    }
-    return { officeId: officeId.data, ...access }
-  }
+  const officeOf = (req: Request, res: Response, userId: string) => officeOfRoute(getOfficeAccess, req, res, userId)
 
   app.get(
     '/api/offices/:officeId/invite-links',
@@ -287,9 +303,11 @@ export function registerRoutes(app: Application, deps: RouteDeps): void {
       res.json({ token, expiresAt: new Date(exp * 1000).toISOString() } satisfies RtTokenResponse)
     }),
   )
+
+  registerChatRoutes(app, deps)
 }
 
-function sendError(res: Response, error: ApiErrorCode, message?: string): void {
+export function sendError(res: Response, error: ApiErrorCode, message?: string): void {
   res.status(API_ERRORS[error]).json(message === undefined ? { error } : { error, message })
 }
 

@@ -25,7 +25,7 @@ jobs:
       - run: npm run validate:map
       - run: npm run build
 
-  # Two browsers in one office against a real server (PGlite in a temporary folder, sign-in codes from the dev mail log).
+  # Browsers (and SDK clients) in one office against a real server (PGlite in a temporary folder, sign-in codes from the dev mail log).
   e2e:
     needs: check
     runs-on: ubuntu-latest

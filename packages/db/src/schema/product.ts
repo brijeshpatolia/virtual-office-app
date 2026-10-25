@@ -1,6 +1,20 @@
 import { sql } from 'drizzle-orm'
-import { check, foreignKey, index, integer, jsonb, pgTable, primaryKey, text, timestamp, unique, uniqueIndex } from 'drizzle-orm/pg-core'
-import { newId } from '../id.ts'
+import {
+  boolean,
+  check,
+  foreignKey,
+  index,
+  integer,
+  jsonb,
+  pgTable,
+  primaryKey,
+  text,
+  timestamp,
+  unique,
+  uniqueIndex,
+  uuid,
+} from 'drizzle-orm/pg-core'
+import { newId, newMessageId } from '../id.ts'
 import { organization, user } from './auth.ts'
 
 // Product tables. Every row belongs to one company (Better Auth organization) through org_id.
@@ -108,4 +122,104 @@ export const auditLog = pgTable(
     at: at('at').notNull().defaultNow(),
   },
   (t) => [index('audit_log_org_id_at_idx').on(t.orgId, t.at)],
+)
+
+const userRef = (name: string) =>
+  text(name)
+    .notNull()
+    .references(() => user.id, { onDelete: 'cascade' })
+
+// The office chat. id: uuidv7 from newMessageId, so "id < x" is "older than x" (keyset paging, read state).
+// A deleted message stays as a tombstone: body '' and deleted_at set; its mentions are removed.
+export const chatMessages = pgTable(
+  'chat_messages',
+  {
+    id: uuid('id')
+      .primaryKey()
+      .$defaultFn(() => newMessageId()),
+    orgId: orgId(),
+    officeId: text('office_id').notNull(),
+    authorId: userRef('author_id'),
+    body: text('body').notNull(),
+    clientMsgId: uuid('client_msg_id').notNull(),
+    // The body has the everyone token (authors other than guests).
+    mentionsEveryone: boolean('mentions_everyone').notNull().default(false),
+    createdAt: at('created_at').notNull().defaultNow(),
+    deletedAt: at('deleted_at'),
+    deletedBy: text('deleted_by').references(() => user.id, { onDelete: 'set null' }),
+  },
+  (t) => [
+    uniqueIndex('chat_messages_author_id_client_msg_id_idx').on(t.authorId, t.clientMsgId),
+    index('chat_messages_office_id_id_idx').on(t.officeId, t.id.desc()),
+    foreignKey({ name: 'chat_messages_office_fk', columns: [t.officeId, t.orgId], foreignColumns: [offices.id, offices.orgId] }).onDelete(
+      'cascade',
+    ),
+    check('chat_messages_body_check', sql`char_length(${t.body}) <= 2000`),
+  ],
+)
+
+// The users a message notifies: mentioned by id (or by the everyone token, which has no rows), members of the
+// company, not the author, and no block between the two.
+export const chatMentions = pgTable(
+  'chat_mentions',
+  {
+    messageId: uuid('message_id')
+      .notNull()
+      .references(() => chatMessages.id, { onDelete: 'cascade' }),
+    orgId: orgId(),
+    userId: userRef('user_id'),
+  },
+  (t) => [
+    primaryKey({ name: 'chat_mentions_pkey', columns: [t.messageId, t.userId] }),
+    index('chat_mentions_user_id_message_id_idx').on(t.userId, t.messageId),
+  ],
+)
+
+// The newest message each user has seen in an office. It only moves forward.
+export const chatReadState = pgTable(
+  'chat_read_state',
+  {
+    userId: userRef('user_id'),
+    orgId: orgId(),
+    officeId: text('office_id').notNull(),
+    lastReadId: uuid('last_read_id').notNull(),
+    updatedAt: at('updated_at').notNull().defaultNow(),
+  },
+  (t) => [
+    primaryKey({ name: 'chat_read_state_pkey', columns: [t.userId, t.officeId] }),
+    foreignKey({ name: 'chat_read_state_office_fk', columns: [t.officeId, t.orgId], foreignColumns: [offices.id, offices.orgId] }).onDelete(
+      'cascade',
+    ),
+  ],
+)
+
+// A user's settings in one company. No row = the defaults.
+export const userPrefs = pgTable(
+  'user_prefs',
+  {
+    userId: userRef('user_id'),
+    orgId: orgId(),
+    statusText: text('status_text').notNull().default(''),
+    blockedUserIds: text('blocked_user_ids').array().notNull().default(sql`'{}'::text[]`),
+    notifyMentions: boolean('notify_mentions').notNull().default(true),
+    updatedAt: at('updated_at').notNull().defaultNow(),
+  },
+  (t) => [
+    primaryKey({ name: 'user_prefs_pkey', columns: [t.userId, t.orgId] }),
+    check('user_prefs_status_text_check', sql`char_length(${t.statusText}) <= 80`),
+    check('user_prefs_blocked_user_ids_check', sql`cardinality(${t.blockedUserIds}) <= 500`),
+  ],
+)
+
+// Chat mutes by an owner or admin, company-wide, until `until`. Unmuting deletes the row.
+export const chatMutes = pgTable(
+  'chat_mutes',
+  {
+    orgId: orgId(),
+    userId: userRef('user_id'),
+    until: at('until').notNull(),
+    mutedBy: text('muted_by').references(() => user.id, { onDelete: 'set null' }),
+    createdAt: at('created_at').notNull().defaultNow(),
+  },
+  (t) => [primaryKey({ name: 'chat_mutes_pkey', columns: [t.orgId, t.userId] })],
 )

@@ -6,6 +6,7 @@ import { LocalPlayer, type MovementKeys } from '../player/LocalPlayer.ts'
 import { RemoteAvatar } from '../remote/RemoteAvatar.ts'
 import { zoneToastText } from '../zoneToast.ts'
 import { ActivityReporter } from './activity.ts'
+import { debugExtras, type ChatDebug } from './debugExtras.ts'
 
 export interface OfficeSessionDeps {
   scene: Phaser.Scene
@@ -37,6 +38,8 @@ export interface OfficeDebugSnapshot {
   }>
   // seatId -> occupant userId ('' = free).
   seats: Record<string, string>
+  // The chat bar, when it is on the page.
+  chat?: ChatDebug
 }
 
 export interface OfficeDebugHandle {
@@ -133,6 +136,7 @@ export class OfficeSession {
         rendered: this.remotes.get(sessionId)?.avatar.rendered ?? null,
       })),
       seats: Object.fromEntries([...link.state.seats].map(([seatId, seat]) => [seatId, seat.occupantId])),
+      ...(debugExtras.chat ? { chat: debugExtras.chat() } : {}),
     }
   }
 

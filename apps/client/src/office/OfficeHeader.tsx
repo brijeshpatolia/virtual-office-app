@@ -1,4 +1,4 @@
-import { useState, type CSSProperties } from 'react'
+import { useState, type CSSProperties, type ReactNode } from 'react'
 import type { InviteLinkSummary, InviteRole } from '@vo/shared'
 import { errorMessage } from '../api/http.ts'
 import { useMediaQuery } from '../hooks/useMediaQuery.ts'
@@ -8,6 +8,7 @@ import { InviteLinksPanel } from './InviteLinksPanel.tsx'
 export const HEADER_HEIGHT = 48
 
 const headerStyle: CSSProperties = {
+  flex: '0 0 auto',
   height: HEADER_HEIGHT,
   boxSizing: 'border-box',
   display: 'flex',
@@ -21,7 +22,7 @@ const headerStyle: CSSProperties = {
   whiteSpace: 'nowrap',
 }
 
-const titleStyle: CSSProperties = { flex: '1 1 auto', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }
+const titleStyle: CSSProperties = { flex: '1 1 auto', minWidth: 48, overflow: 'hidden', textOverflow: 'ellipsis' }
 
 const selectStyle: CSSProperties = { ...headerButtonStyle, padding: '5px 6px', background: '#141820' }
 
@@ -42,10 +43,11 @@ export interface OfficeHeaderProps {
   onSignOut: () => void
 }
 
-export function OfficeHeader({ companyName, officeName, userName, invites, onSignOut }: OfficeHeaderProps) {
+// presence: the status menu and the People button.
+export function OfficeHeader({ companyName, officeName, userName, invites, onSignOut, presence }: OfficeHeaderProps & { presence?: ReactNode }) {
   const narrow = useMediaQuery('(max-width: 640px)')
   return (
-    <header style={narrow ? { ...headerStyle, gap: 8, padding: '0 8px' } : headerStyle} data-testid="office-header">
+    <header style={narrow ? { ...headerStyle, gap: 6, padding: '0 8px', overflowX: 'auto' } : headerStyle} data-testid="office-header">
       <div style={titleStyle} title={`${companyName} · ${officeName}`}>
         <strong data-testid="company-name">{companyName}</strong>
         <span style={{ opacity: 0.7 }}> · </span>
@@ -53,6 +55,7 @@ export function OfficeHeader({ companyName, officeName, userName, invites, onSig
       </div>
       {invites && <InviteControl createInvite={invites.create} narrow={narrow} />}
       {invites && <InviteLinksPanel invites={invites} />}
+      {presence}
       {!narrow && (
         <span data-testid="user-name" style={{ opacity: 0.85 }}>
           {userName}

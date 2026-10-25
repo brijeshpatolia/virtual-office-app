@@ -1,7 +1,22 @@
-import { expect, test, type Browser, type Page, type TestInfo } from '@playwright/test'
+import { expect, test } from '@playwright/test'
 import { MOVE_CHECK_BODY } from '../packages/shared/src/movement.ts'
 import { CLIENT_ORIGIN } from './env.ts'
-import { enterName, inOffice, localPosition, signInWithCode, snapshot, standStill, walk, walkTo, walkUntilBlocked, type Point } from './support.ts'
+import {
+  arrive,
+  enterName,
+  inOffice,
+  localPosition,
+  near,
+  newPage,
+  screenshot,
+  signInWithCode,
+  snapshot,
+  standStill,
+  toast,
+  walk,
+  walkTo,
+  walkUntilBlocked,
+} from './support.ts'
 
 // Two people meet in a fresh office, and someone from another company stays out. Positions are sprite centres in
 // world px (the feet are 12 px lower). The map: apps/client/public/assets/map/map.json (spawn in the lobby).
@@ -14,35 +29,6 @@ const bob = { email: `bob-${run}@example.com`, name: 'Bob' }
 const cleo = { email: `cleo-${run}@example.com`, name: 'Cleo' }
 // Set by the first test, read by the second.
 let annOffice: { id: string; url: string } | undefined
-
-async function newPage(browser: Browser): Promise<Page> {
-  const context = await browser.newContext()
-  return context.newPage()
-}
-
-// PNGs in E2E_SCREENSHOT_DIR when set, else in the test's output folder; always attached to the report.
-async function screenshot(page: Page, name: string, testInfo: TestInfo): Promise<void> {
-  const dir = process.env.E2E_SCREENSHOT_DIR
-  const path = dir ? `${dir}/${name}.png` : testInfo.outputPath(`${name}.png`)
-  await page.screenshot({ path })
-  await testInfo.attach(name, { path, contentType: 'image/png' })
-}
-
-// walkTo that must get all the way.
-async function arrive(page: Page, target: Point): Promise<void> {
-  const at = await walkTo(page, target.x, target.y)
-  const message = `at (${at.x}, ${at.y}), wanted (${target.x}, ${target.y}): ${JSON.stringify(await snapshot(page))}`
-  expect(near(at.x, target.x) && near(at.y, target.y), message).toBe(true)
-}
-
-// Positions travel as float32.
-function near(value: number | undefined, expected: number): boolean {
-  return value !== undefined && Math.abs(value - expected) < 0.5
-}
-
-function toast(page: Page, text: string) {
-  return page.getByTestId('toast').filter({ hasText: text })
-}
 
 test('two members see each other walk, sit and bump into a wall', async ({ browser }, testInfo) => {
   test.setTimeout(180_000)

@@ -3,7 +3,11 @@ import type { Facing } from '../types.ts'
 // The synced Colyseus state of an OfficeRoom, as the client reads it (room.state).
 // The server defines the same fields as @colyseus/schema classes (apps/server/src/rooms/state.ts).
 
-export const PLAYER_STATUSES = ['available', 'away'] as const
+// What the user picks (request 'status:set'). 'away' is never picked: the server sets it after idle time.
+export const CHOSEN_STATUSES = ['available', 'busy', 'dnd'] as const
+export type ChosenStatus = (typeof CHOSEN_STATUSES)[number]
+// What everyone sees: effectiveStatus() (presence.ts) of the chosen status, idleness and the zone.
+export const PLAYER_STATUSES = ['available', 'busy', 'dnd', 'away'] as const
 export type PlayerStatus = (typeof PLAYER_STATUSES)[number]
 
 export interface PlayerState {
@@ -20,7 +24,12 @@ export interface PlayerState {
   readonly zoneId: string
   // '' = standing.
   readonly seatId: string
+  // Effective status (the ring on the avatar and in the People panel).
   readonly status: PlayerStatus
+  // The status the user picked, for their own status menu.
+  readonly chosenStatus: ChosenStatus
+  // Up to STATUS_TEXT_MAX_LENGTH characters; '' = none. From the user's prefs at join, then 'status:set'.
+  readonly statusText: string
 }
 
 export interface SeatState {

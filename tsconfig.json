@@ -1,7 +1,10 @@
 {
   "extends": "./tsconfig.base.json",
   "compilerOptions": {
-    "types": ["node"]
+    "types": ["node"],
+    // The e2e helpers use @colyseus/sdk, whose .d.ts files fail under TS 6 (as in apps/server), so library checks
+    // are off here too.
+    "skipLibCheck": true
   },
   "include": ["vitest.config.ts", "playwright.config.ts", "e2e"]
 }

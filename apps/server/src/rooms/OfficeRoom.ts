@@ -31,6 +31,7 @@ import {
   buildGrid,
   checkMove,
   distance,
+  effectiveStatus,
   fullMoveBudget,
   lineOfSight,
   nearestFreeStandSpot,
@@ -38,6 +39,7 @@ import {
   sweptSegmentBlocked,
   zoneAt,
   zoneEntryBlock,
+  type ChosenStatus,
   type Facing,
   type MoveBudget,
   type MoveMessage,
@@ -52,6 +54,11 @@ import {
 } from '@vo/shared'
 import type { GetOfficeAccess } from '../auth/membership.ts'
 import type { VerifyAccessToken } from '../auth/verifyAccessToken.ts'
+import type { Services } from '../chat/services.ts'
+import { adminHandlers } from './handlers/admin.ts'
+import { chatHandlers } from './handlers/chat.ts'
+import type { HandlerContext } from './handlers/context.ts'
+import { presenceHandlers } from './handlers/presence.ts'
 import { OfficeState, Player, Seat } from './state.ts'
 import { DEFAULT_ROOM_SETTINGS, type OfficeRoomSettings, type RoomStore } from './store.ts'
 
@@ -62,6 +69,8 @@ export interface OfficeRoomDeps {
   // Office settings and presence_sessions rows (createRoomStore). Without it the room uses the default settings
   // and records no presence.
   store?: RoomStore
+  // Chat, prefs and moderation (P2). Without them those requests are rejected with 'invalid' (handlers/context.ts).
+  services?: Services
   // Clock in ms; tests pass a fake one.
   now?: () => number
 }
@@ -115,6 +124,8 @@ interface Session {
   readonly sessionId: string
   readonly userId: string
   role: OrgRole
+  // The role the client was last told (role:changed); the join's role at first.
+  notifiedRole: OrgRole
   // null while the room waits for a dropped client to reconnect.
   client: OfficeClient | null
   reconnection: Deferred<OfficeClient> | null
@@ -126,6 +137,10 @@ interface Session {
   zones: ZoneTracker
   activeAt: number
   hiddenSince: number | null
+  // What the user picked with status:set (kept across a reconnect; a new join starts at 'available'), and the
+  // server's idle flag. player.status = effectiveStatus of these and the zone.
+  chosen: ChosenStatus
+  away: boolean
   presenceId: Promise<string | null>
 }
 
@@ -161,6 +176,7 @@ export function createOfficeRoom(deps: OfficeRoomDeps) {
   const walkGrid = buildGrid(map, ['wall', 'furniture'])
   const wallGrid = buildGrid(map, ['wall'])
   const seatDefs = new Map(map.seats.map((seat) => [seat.id, seat]))
+  const zoneDefs = new Map(map.zones.map((zone) => [zone.id, zone]))
   const spawn = map.spawns.find((s) => s.id === MAIN_SPAWN_ID)
   if (spawn === undefined) throw new Error(`The office map has no spawn "${MAIN_SPAWN_ID}"`)
   const spawnZoneId = zoneAt(map, spawn.x, spawn.y)?.id
@@ -176,6 +192,11 @@ export function createOfficeRoom(deps: OfficeRoomDeps) {
     #checkingAccess = false
     // Presence rows still being closed; onDispose waits for them, so a shutdown does not close the database first.
     readonly #pendingWrites = new Set<Promise<void>>()
+    readonly #disposeTasks: (() => Promise<void>)[] = []
+    readonly #beforeJoinTasks: ((userId: string) => Promise<void>)[] = []
+    readonly #sessionEndTasks: ((userId: string) => void)[] = []
+    readonly #context: HandlerContext = this.#handlerContext()
+    #stopPrefsListener: (() => void) | null = null
 
     // Runs during the matchmake request, before the room is found or created. The client learns only "unauthorized".
     static override async onAuth(token: unknown, options: unknown): Promise<RoomAuth> {
@@ -197,6 +218,15 @@ export function createOfficeRoom(deps: OfficeRoomDeps) {
       this.onMessage(MSG.activity, (client, message) => this.#activity(client, message))
       this.onMessage(MSG.sit, (client, message, ctx) => this.#sit(client, message, ctx))
       this.onMessage(MSG.stand, (client, _message, ctx) => this.#stand(client, ctx))
+      const context = this.#context
+      const handlers = { ...chatHandlers(context), ...presenceHandlers(context), ...adminHandlers(context) }
+      for (const [type, handler] of Object.entries(handlers)) this.onMessage(type, handler)
+      // A status text saved elsewhere (PUT /api/me/prefs, another office of the company) shows at once.
+      this.#stopPrefsListener =
+        deps.services?.prefs.onChange((orgId, userId, prefs, origin) => {
+          const found = orgId === this.#orgId && origin !== context ? this.#playerOf(userId) : null
+          if (found !== null && found.player.statusText !== prefs.statusText) found.player.statusText = prefs.statusText
+        }) ?? null
       this.clock.setInterval(() => this.#tick(), TICK_MS)
     }
 
@@ -205,7 +235,8 @@ export function createOfficeRoom(deps: OfficeRoomDeps) {
       if (auth === undefined || auth.officeId !== this.#officeId) throw unauthorized()
       if (this.#orgId === '') this.#orgId = auth.orgId
       if (auth.orgId !== this.#orgId) throw unauthorized()
-      this.#guestZoneTypes = (await this.#loadSettings()).guestZoneTypes
+      const [settings, statusText] = await Promise.all([this.#loadSettings(), this.#loadStatusText(auth.userId)])
+      this.#guestZoneTypes = settings.guestZoneTypes
 
       // Everything below is synchronous, so two joins of one user cannot interleave.
       const previous = this.#sessionOfUser.get(auth.userId)
@@ -220,6 +251,7 @@ export function createOfficeRoom(deps: OfficeRoomDeps) {
         sessionId: client.sessionId,
         userId: auth.userId,
         role: auth.role,
+        notifiedRole: auth.role,
         client,
         reconnection: null,
         pos,
@@ -229,12 +261,16 @@ export function createOfficeRoom(deps: OfficeRoomDeps) {
         zones,
         activeAt: at,
         hiddenSince: null,
+        chosen: 'available',
+        away: false,
         presenceId: this.#startPresence(auth.userId),
       }
       this.#sessions.set(client.sessionId, session)
       this.#sessionOfUser.set(auth.userId, client.sessionId)
       const player = new Player({ userId: auth.userId, name: auth.name, color: avatarColor(auth.userId), x: pos.x, y: pos.y })
       player.zoneId = zoneId
+      player.statusText = statusText
+      this.#applyStatus(session, player)
       this.state.players.set(client.sessionId, player)
     }
 
@@ -257,6 +293,7 @@ export function createOfficeRoom(deps: OfficeRoomDeps) {
       if (session === undefined) return
       session.client = client
       session.reconnection = null
+      this.#notifyRole(session)
     }
 
     // A consented leave, or a dropped client that did not come back in time.
@@ -266,11 +303,86 @@ export function createOfficeRoom(deps: OfficeRoomDeps) {
     }
 
     override async onDispose() {
+      this.#stopPrefsListener?.()
+      await Promise.all(this.#disposeTasks.map((task) => task()))
       await Promise.all(this.#pendingWrites)
     }
 
     override onUncaughtException(error: RoomException, methodName: RoomMethodName) {
       console.error(`OfficeRoom ${this.#officeId}: ${methodName} failed:`, error.cause ?? error)
+    }
+
+    #handlerContext(): HandlerContext {
+      return {
+        services: deps.services,
+        userOf: (client) => {
+          const session = this.#sessions.get(client.sessionId)
+          const auth = client.auth
+          return session === undefined || auth === undefined ? null : { ...auth, role: session.role }
+        },
+        playerOf: (userId) => this.#playerOf(userId),
+        setStatus: (client, chosen, statusText) => {
+          const found = this.#lookup(client)
+          if (found === null) return null
+          found.session.chosen = chosen
+          if (statusText !== undefined) found.player.statusText = statusText
+          this.#markActive(found.session, found.player, now())
+          return found.player
+        },
+        broadcast: (type, payload, except) => {
+          this.broadcast(type, payload, except === undefined ? undefined : { except })
+        },
+        recipients: (except) => {
+          const list: { client: OfficeClient; userId: string }[] = []
+          for (const session of this.#sessions.values()) {
+            if (session.client !== null && session.client !== except) list.push({ client: session.client, userId: session.userId })
+          }
+          return list
+        },
+        beforeJoin: (task) => {
+          this.#beforeJoinTasks.push(task)
+        },
+        onSessionEnd: (task) => {
+          this.#sessionEndTasks.push(task)
+        },
+        kick: (userId) => {
+          const session = this.#sessionOf(userId)
+          if (session === null) return false
+          this.#close(session, ROOM_CLOSE.kicked)
+          return true
+        },
+        onDispose: (task) => {
+          this.#disposeTasks.push(task)
+        },
+        now,
+      }
+    }
+
+    #sessionOf(userId: string): Session | null {
+      const sessionId = this.#sessionOfUser.get(userId)
+      return (sessionId === undefined ? undefined : this.#sessions.get(sessionId)) ?? null
+    }
+
+    #playerOf(userId: string): { player: Player; client: OfficeClient | null } | null {
+      const session = this.#sessionOf(userId)
+      const player = session === null ? undefined : this.state.players.get(session.sessionId)
+      return session === null || player === undefined ? null : { player, client: session.client }
+    }
+
+    // The status text saved in the user's prefs for this company; '' when there are no services or on a failure.
+    async #loadStatusText(userId: string): Promise<string> {
+      const prefs = deps.services?.prefs
+      if (prefs === undefined) return ''
+      await Promise.all(this.#beforeJoinTasks.map((task) => task(userId))).catch((error: unknown) => {
+        console.error(`OfficeRoom ${this.#officeId}: a pending write before the join failed:`, error)
+      })
+      return prefs.get(this.#orgId, userId).then(
+        (saved) => saved.statusText,
+        (error: unknown) => {
+          console.error(`OfficeRoom ${this.#officeId}: could not load the status text:`, error)
+          return ''
+        },
+      )
     }
 
     #loadSettings(): Promise<OfficeRoomSettings> {
@@ -362,12 +474,22 @@ export function createOfficeRoom(deps: OfficeRoomDeps) {
       player.dir = dir
       player.moving = false
       player.zoneId = session.zones.update(pos.x, pos.y + FEET_OFFSET_Y, at).zoneId ?? ''
+      this.#applyStatus(session, player)
     }
 
     #markActive(session: Session, player: Player, at: number) {
       session.activeAt = at
       session.hiddenSince = null
-      if (player.status !== 'available') player.status = 'available'
+      session.away = false
+      this.#applyStatus(session, player)
+    }
+
+    // The effective status (shared rule): DND, then away, then busy (chosen, or in a zone with mediaMode 'room').
+    #applyStatus(session: Session, player: Player) {
+      const inRoomZone = zoneDefs.get(player.zoneId)?.mediaMode === 'room'
+      const status = effectiveStatus({ chosen: session.chosen, away: session.away, inRoomZone })
+      if (player.status !== status) player.status = status
+      if (player.chosenStatus !== session.chosen) player.chosenStatus = session.chosen
     }
 
     #activity(client: OfficeClient, message: unknown) {
@@ -431,8 +553,8 @@ export function createOfficeRoom(deps: OfficeRoomDeps) {
         if (player === undefined) continue
         const idle = at - session.activeAt >= AWAY_AFTER_MS
         const hidden = session.hiddenSince !== null && at - session.hiddenSince >= HIDDEN_AWAY_AFTER_MS
-        const status = idle || hidden ? 'away' : 'available'
-        if (player.status !== status) player.status = status
+        session.away = idle || hidden
+        this.#applyStatus(session, player)
       }
       if (at - this.#accessCheckedAt >= ACCESS_RECHECK_MS && !this.#checkingAccess) {
         this.#accessCheckedAt = at
@@ -458,10 +580,18 @@ export function createOfficeRoom(deps: OfficeRoomDeps) {
           session.role = access.role
           // Demoted to guest inside a zone guests may not enter: they enter the office again, at the spawn.
           if (changed && this.#forbiddenWhereItIs(session)) this.#close(session, ROOM_CLOSE.roleChanged)
+          else if (changed) this.#notifyRole(session)
         }
       } finally {
         this.#checkingAccess = false
       }
+    }
+
+    // Tells the client its current role, once per change (a dropped client hears it when it reconnects).
+    #notifyRole(session: Session) {
+      if (session.client === null || session.notifiedRole === session.role) return
+      session.notifiedRole = session.role
+      session.client.send(MSG.roleChanged, { role: session.role })
     }
 
     #forbiddenWhereItIs(session: Session): boolean {
@@ -484,6 +614,7 @@ export function createOfficeRoom(deps: OfficeRoomDeps) {
       const player = this.state.players.get(session.sessionId)
       if (player !== undefined && player.seatId !== '') this.#freeSeat(player.seatId, session.userId)
       this.state.players.delete(session.sessionId)
+      for (const task of this.#sessionEndTasks) task(session.userId)
       const store = deps.store
       if (store === undefined) return
       const write = session.presenceId

@@ -1,5 +1,32 @@
 import { z } from 'zod'
 import { FACINGS } from '../types.ts'
+import type {
+  ChatDeleted,
+  ChatDeleteRejectReason,
+  ChatDeleteRequest,
+  ChatDeleteResponse,
+  ChatMessage,
+  ChatMuted,
+  ChatRead,
+  ChatSendRejectReason,
+  ChatSendRequest,
+  ChatSendResponse,
+} from './chat.ts'
+import { OrgRoleSchema } from './http.ts'
+import type {
+  AdminKickRequest,
+  AdminKickResponse,
+  AdminMuteRequest,
+  AdminMuteResponse,
+  AdminRejectReason,
+  BlockRejectReason,
+  BlockSetRequest,
+  BlockSetResponse,
+  StatusSetRequest,
+  StatusSetResponse,
+  Wave,
+  WaveReceived,
+} from './presence.ts'
 
 // Realtime messages of the 'office' room. zod checks every payload on the server.
 // "send" = room.send / client.send (fire and forget). "request" = room.request(type, payload) on the client;
@@ -55,26 +82,58 @@ export type StandRequest = z.infer<typeof StandRequestSchema>
 export const StandResponseSchema = z.object({ ok: z.literal(true), x: coord, y: coord })
 export type StandResponse = z.infer<typeof StandResponseSchema>
 
+// Server to client 'role:changed': the user's role in the company changed while in the office (the room checks once
+// a minute, and tells a reconnected client a change it missed). The client updates what it offers.
+export const RoleChangedSchema = z.object({ role: OrgRoleSchema })
+export type RoleChanged = z.infer<typeof RoleChangedSchema>
+
+// Chat, status, waves, blocks and moderation: schemas in chat.ts and presence.ts.
 export const MSG = {
   move: 'move',
   moveReject: 'move:reject',
   sit: 'seat:sit',
   stand: 'seat:stand',
   activity: 'presence:activity',
+  chatSend: 'chat:send',
+  chatNew: 'chat:new',
+  chatDelete: 'chat:delete',
+  chatDeleted: 'chat:deleted',
+  chatRead: 'chat:read',
+  chatMuted: 'chat:muted',
+  statusSet: 'status:set',
+  wave: 'wave',
+  waveReceived: 'wave:received',
+  blockSet: 'block:set',
+  adminMute: 'admin:mute',
+  adminKick: 'admin:kick',
+  roleChanged: 'role:changed',
 } as const
 
 export interface ClientMessages {
   [MSG.move]: MoveMessage
   [MSG.activity]: PresenceActivity
+  [MSG.chatRead]: ChatRead
+  [MSG.wave]: Wave
 }
 
 export interface ServerMessages {
   [MSG.moveReject]: MoveReject
+  [MSG.chatNew]: ChatMessage
+  [MSG.chatDeleted]: ChatDeleted
+  [MSG.chatMuted]: ChatMuted
+  [MSG.waveReceived]: WaveReceived
+  [MSG.roleChanged]: RoleChanged
 }
 
 export interface RoomRequests {
   [MSG.sit]: { request: SitRequest; response: SitResponse; reject: SitRejectReason }
   [MSG.stand]: { request: StandRequest; response: StandResponse; reject: 'invalid' }
+  [MSG.chatSend]: { request: ChatSendRequest; response: ChatSendResponse; reject: ChatSendRejectReason }
+  [MSG.chatDelete]: { request: ChatDeleteRequest; response: ChatDeleteResponse; reject: ChatDeleteRejectReason }
+  [MSG.statusSet]: { request: StatusSetRequest; response: StatusSetResponse; reject: 'invalid' }
+  [MSG.blockSet]: { request: BlockSetRequest; response: BlockSetResponse; reject: BlockRejectReason }
+  [MSG.adminMute]: { request: AdminMuteRequest; response: AdminMuteResponse; reject: AdminRejectReason }
+  [MSG.adminKick]: { request: AdminKickRequest; response: AdminKickResponse; reject: AdminRejectReason }
 }
 
 // @colyseus/sdk rejects room.request() with an Error named 'rejected' whose `reason` is the ctx.reject() value.

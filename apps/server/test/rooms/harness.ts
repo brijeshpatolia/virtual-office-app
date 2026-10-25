@@ -18,6 +18,7 @@ import { fileURLToPath } from 'node:url'
 import { expect } from 'vitest'
 import type { OfficeAccess } from '../../src/auth/membership.ts'
 import type { AccessClaims } from '../../src/auth/verifyAccessToken.ts'
+import type { Services } from '../../src/chat/services.ts'
 import type { OfficeState, Player } from '../../src/rooms/state.ts'
 import type { OfficeRoomSettings, RoomStore } from '../../src/rooms/store.ts'
 import { createRealtimeServer, listeningPort, loadOfficeMap } from '../../src/server.ts'
@@ -114,7 +115,8 @@ export interface RoomServer {
   close(): Promise<void>
 }
 
-export async function startRoomServer(officeMap: OfficeMap): Promise<RoomServer> {
+// services: the P2 services (chat, prefs, moderation) on a test database; without them those requests fail.
+export async function startRoomServer(officeMap: OfficeMap, options: { services?: Services } = {}): Promise<RoomServer> {
   const { publicKey, privateKey } = await generateKeyPair('EdDSA')
   const clock = new FakeClock()
   const store = new FakeStore()
@@ -132,7 +134,7 @@ export async function startRoomServer(officeMap: OfficeMap): Promise<RoomServer>
   const server: Server = createRealtimeServer({
     httpServer,
     clientOrigin: CLIENT_ORIGIN,
-    roomDeps: { officeMap, verifyAccessToken, getOfficeAccess, store, now: clock.now },
+    roomDeps: { officeMap, verifyAccessToken, getOfficeAccess, store, now: clock.now, services: options.services },
   })
   await server.listen(0)
   const endpoint = `http://127.0.0.1:${listeningPort(httpServer)}`
@@ -179,6 +181,8 @@ export const STEP_MS = 250
 export class TestPlayer {
   readonly room: OfficeRoomView
   readonly rejects: MoveReject[] = []
+  // Every other server message, in order.
+  readonly messages: { type: string | number; payload: unknown }[] = []
   closeCode: number | null = null
   readonly #clock: FakeClock
   #seq = 0
@@ -187,6 +191,7 @@ export class TestPlayer {
     this.room = room
     this.#clock = clock
     room.onMessage(MSG.moveReject, (reject: MoveReject) => this.rejects.push(reject))
+    room.onMessage('*', (type, payload) => this.messages.push({ type, payload }))
     room.onLeave((code) => {
       this.closeCode = code
     })
@@ -194,6 +199,10 @@ export class TestPlayer {
 
   get sessionId(): string {
     return this.room.sessionId
+  }
+
+  received<T = unknown>(type: string): T[] {
+    return this.messages.filter((m) => m.type === type).map((m) => m.payload as T)
   }
 
   serverState(): OfficeState {

@@ -1,4 +1,5 @@
 import { and, asc, desc, eq, getTableColumns, gt, isNull, lt, or, sql } from 'drizzle-orm'
+import { chatRepository } from './chatRepository.ts'
 import type { Db } from './index.ts'
 import { auditLog, inviteLinks, member, memberRemovals, offices, organization, presenceSessions, user } from './schema/index.ts'
 
@@ -41,6 +42,7 @@ export function forOrg(db: Db, orgId: string) {
 
   return {
     orgId,
+    ...chatRepository(db, orgId),
 
     async createOffice(input: NewOffice): Promise<OfficeRow> {
       return one(await db.insert(offices).values({ ...input, orgId }).returning())

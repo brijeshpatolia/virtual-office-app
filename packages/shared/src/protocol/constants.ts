@@ -52,4 +52,6 @@ export const ROOM_CLOSE = {
   removed: 4101,
   // The user's role changed and they stood where the new role may not be; they enter again at the spawn.
   roleChanged: 4102,
+  // An owner or admin sent the user out of the office (admin:kick). The membership stays; they may enter again.
+  kicked: 4103,
 } as const
